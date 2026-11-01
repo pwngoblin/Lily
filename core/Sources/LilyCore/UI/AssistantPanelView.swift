@@ -179,9 +179,6 @@ enum MarkdownRenderer {
         return attributed
     }
 
-    /// Replies are written from page text, which can tell the model to write
-    /// `[paypal.com](https://evil.example)`. Each web link whose text doesn't already name its
-    /// real host gets the host after it, so the reply can't hide where a link goes.
     /// True when the link text names `host` as a whole domain (`www.` ignored on both sides).
     /// A substring test isn't enough: `paypal.com` contains `ypal.com` and `al.com`.
     static func namesHost(_ label: String, _ host: String) -> Bool {
@@ -195,6 +192,9 @@ enum MarkdownRenderer {
             .contains { bare($0) == site }
     }
 
+    /// Replies are written from page text, which can tell the model to write
+    /// `[paypal.com](https://evil.example)`. Each web link whose text doesn't already name its
+    /// real host gets the host after it, so the reply can't hide where a link goes.
     static func revealLinkHosts(in text: inout AttributedString) {
         let links = text.runs.compactMap { run -> (Range<AttributedString.Index>, String)? in
             guard let url = run.link, url.scheme == "https" || url.scheme == "http", let host = url.host?.lowercased(), !host.isEmpty else { return nil }

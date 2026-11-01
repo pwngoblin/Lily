@@ -190,11 +190,12 @@ public final class History {
 
     private func write(to file: SealedFile) async {
         let snapshot = visits
+        let ticket = file.reserve() // ordered by when the snapshot was taken, not when it's written
         await Task.detached(priority: .utility) {
             do {
                 let encoder = JSONEncoder()
                 encoder.dateEncodingStrategy = .millisecondsSince1970
-                if snapshot.isEmpty { file.delete() } else { try await file.write(encoder.encode(snapshot)) }
+                if snapshot.isEmpty { file.delete(ticket: ticket) } else { try await file.write(encoder.encode(snapshot), ticket: ticket) }
             } catch {
                 Log.app.error("History save failed: \(String(describing: error), privacy: .public)")
             }

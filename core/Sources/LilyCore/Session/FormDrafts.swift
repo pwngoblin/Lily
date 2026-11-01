@@ -47,8 +47,7 @@ public final class FormDrafts {
 
     /// The origin drafts for `url` belong to, as `location.origin` writes it.
     nonisolated static func origin(_ url: URL) -> String? {
-        guard let scheme = url.scheme?.lowercased(), scheme == "https" || scheme == "http", let host = url.host?.lowercased() else { return nil }
-        return "\(scheme)://\(host)" + (url.port.map { ":\($0)" } ?? "")
+        ExtensionScriptInjector.origin(url)
     }
 
     public func load() async {
@@ -118,8 +117,9 @@ public final class FormDrafts {
     public func flush() async {
         saveTask?.cancel()
         guard let file else { return }
+        let ticket = file.reserve() // before the call hops off the main actor
         do {
-            if drafts.isEmpty { file.delete() } else { try await file.write(JSONEncoder().encode(drafts)) }
+            if drafts.isEmpty { file.delete(ticket: ticket) } else { try await file.write(JSONEncoder().encode(drafts), ticket: ticket) }
         } catch {
             Log.app.error("Saving form drafts failed")
         }

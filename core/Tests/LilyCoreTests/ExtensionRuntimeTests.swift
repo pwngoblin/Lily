@@ -188,5 +188,10 @@ private func package(_ manifest: String, _ files: [String: String] = [:]) throws
         #expect(!runs(guarded, top: false, origin: "https://pay.example"))      // cross-origin frame
         let strict = ExtensionScriptInjector.sameOriginFramesOnly("  'use strict'; ran = true;", mainFrame: main)
         #expect(strict.hasPrefix("\"use strict\";if (window !== window.top"))
+        #expect(ExtensionScriptInjector.startsStrict("\u{FEFF}/*! MIT License */\n// build 42\n\"use strict\";\nvar a"))
+        #expect(!ExtensionScriptInjector.startsStrict("/* header */ var useStrict = 'use strict';"))
+        #expect(ExtensionScriptInjector.startsStrict("// MIT\r\n// (c) 2026\r\n'use strict';\r\nvar a"))
+        #expect(ExtensionScriptInjector.origin(URL(string: "https://[::1]:8443/x")!) == "https://[::1]:8443")
+        #expect(FormDrafts.origin(URL(string: "https://Mail.example:443/compose")!) == "https://mail.example")
     }
 }

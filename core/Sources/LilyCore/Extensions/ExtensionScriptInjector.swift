@@ -100,10 +100,26 @@ final class ExtensionScriptInjector {
     nonisolated static func sameOriginFramesOnly(_ source: String, mainFrame url: URL?) -> String {
         let origin = url.flatMap(Self.origin) ?? "null"
         let literal = (try? String(decoding: JSONEncoder().encode([origin]), as: UTF8.self)).map { String($0.dropFirst().dropLast()) } ?? "\"null\""
-        let trimmed = source.drop { $0.isWhitespace }
-        let strict = trimmed.hasPrefix("\"use strict\"") || trimmed.hasPrefix("'use strict'") ? "\"use strict\";" : ""
+        let strict = Self.startsStrict(source) ? "\"use strict\";" : ""
         return strict + "if (window !== window.top && location.origin !== \(literal)) "
             + "throw new Error(\"Lily: this content script doesn't run in frames of other sites\");\n" + source
+    }
+
+    /// Whether the script's directive prologue opens with "use strict", after any BOM, whitespace
+    /// and comments (a license header usually comes first).
+    nonisolated static func startsStrict(_ source: String) -> Bool {
+        var rest = Substring(source)
+        while true {
+            rest = rest.drop { $0.isWhitespace || $0 == "\u{FEFF}" }
+            if rest.hasPrefix("//") {
+                rest = rest.drop { !$0.isNewline } // CRLF is one Character; also U+2028/U+2029
+            } else if rest.hasPrefix("/*") {
+                guard let end = rest.range(of: "*/") else { return false }
+                rest = rest[end.upperBound...]
+            } else {
+                return rest.hasPrefix("\"use strict\"") || rest.hasPrefix("'use strict'")
+            }
+        }
     }
 
     /// An http(s) URL's origin as `location.origin` writes it; nil for others (file: is "null").

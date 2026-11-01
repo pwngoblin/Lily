@@ -240,8 +240,9 @@ public final class AdBlocker {
 
     private func saveProcedural(_ filters: [String: [ProceduralFilter]]) async {
         guard let file = file("procedural") else { return }
-        if filters.isEmpty { file.delete(); return }
-        if let data = try? JSONEncoder().encode(filters) { try? await file.write(data) }
+        let ticket = file.reserve()
+        if filters.isEmpty { file.delete(ticket: ticket); return }
+        if let data = try? JSONEncoder().encode(filters) { try? await file.write(data, ticket: ticket) }
     }
 
     private func compiledOrCompile(_ id: String, rules: [[String: Any]], in store: WKContentRuleListStore) async throws -> WKContentRuleList {

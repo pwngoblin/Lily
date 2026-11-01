@@ -59,7 +59,8 @@ final class ExtensionStorage {
     private func save(_ extensionID: String, _ items: [String: JSONValue]) async {
         cache[extensionID] = items
         guard let file = file(extensionID) else { return }
-        if items.isEmpty { file.delete(); return }
-        do { try await file.write(JSONValue.object(items).jsonData()) } catch { Log.extensions.error("Saving extension storage failed") }
+        let ticket = file.reserve() // a later set or clear wins over this one
+        if items.isEmpty { file.delete(ticket: ticket); return }
+        do { try await file.write(JSONValue.object(items).jsonData(), ticket: ticket) } catch { Log.extensions.error("Saving extension storage failed") }
     }
 }

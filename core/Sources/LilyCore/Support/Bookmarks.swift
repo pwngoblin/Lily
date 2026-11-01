@@ -116,9 +116,10 @@ public final class Bookmarks {
         saveTask?.cancel()
         guard let file else { return }
         let snapshot = root
+        let ticket = file.reserve() // ordered by when the snapshot was taken, not when it's written
         await Task.detached(priority: .utility) {
             do {
-                if snapshot.isEmpty { file.delete() } else { try await file.write(try JSONEncoder().encode(snapshot)) }
+                if snapshot.isEmpty { file.delete(ticket: ticket) } else { try await file.write(try JSONEncoder().encode(snapshot), ticket: ticket) }
             } catch {
                 Log.app.error("Saving bookmarks failed")
             }

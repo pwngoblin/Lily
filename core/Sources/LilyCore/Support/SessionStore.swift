@@ -33,6 +33,8 @@ public actor SessionStore {
     /// What the sealed file holds now. Titles and loading states change the window every few
     /// hundred milliseconds while pages load; the saved session usually doesn't, so an unchanged
     /// session isn't encrypted and rewritten again.
+    /// Bumped by clear(), so a save that was writing during it doesn't mark its session saved.
+    private var clears = 0
     private var saved: Session?
 
     public init(directory: URL, keys: KeyStore = KeychainKeyStore()) {
@@ -62,15 +64,18 @@ public actor SessionStore {
 
     public func save(_ session: Session) async {
         guard session != saved else { return }
+        let ticket = file.reserve() // a clear() during the write wins
+        let generation = clears
         do {
-            try await file.write(JSONEncoder().encode(session))
-            saved = session
+            try await file.write(JSONEncoder().encode(session), ticket: ticket)
+            if clears == generation { saved = session }
         } catch {
             Log.app.error("Session save failed: \(String(describing: error), privacy: .public)")
         }
     }
 
     public func clear() {
+        clears += 1
         saved = nil
         file.delete()
         try? FileManager.default.removeItem(at: legacyURL)

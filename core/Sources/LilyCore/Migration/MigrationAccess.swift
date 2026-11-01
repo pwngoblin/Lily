@@ -68,6 +68,7 @@ final class MigrationAccess {
 
     private func save() async {
         guard let file, let data = try? JSONEncoder().encode(bookmarks) else { return }
-        do { try await file.write(data) } catch { Log.app.error("Saving import folder access failed") }
+        let ticket = file.reserve()
+        do { try await file.write(data, ticket: ticket) } catch { Log.app.error("Saving import folder access failed") }
     }
 }
