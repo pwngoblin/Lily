@@ -37,11 +37,17 @@ jobs:
       - name: Check where this PR comes from
         # Branch names come from the PR author: pass them as environment variables (data), never
         # interpolate them into the script, or a branch name like  x";curl${IFS}…|sh;"  runs code.
+        # The branch name alone proves nothing: a fork can name its branch main or hotfix/x.
         env:
           BASE_REF: ${{ github.base_ref }}
           HEAD_REF: ${{ github.head_ref }}
+          HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
+          REPO: ${{ github.repository }}
         run: |
           base="$BASE_REF"; head="$HEAD_REF"
+          if [ "$HEAD_REPO" != "$REPO" ]; then
+            echo "::error::$base only takes PRs from branches of $REPO, not from $HEAD_REPO."; exit 1
+          fi
           case "$base:$head" in
             testing:main|release:main|release:hotfix/*) echo "$head -> $base is allowed" ;;
             *) echo "::error::$head -> $base is not allowed. Merge features into main first, then open main -> $base (hotfix/* may target release)."; exit 1 ;;
@@ -54,8 +60,10 @@ jobs:
     timeout-minutes: 45
     env:
       CHANNEL: ${{ github.base_ref || (github.event_name == 'push' && github.ref_name) || 'manual' }}
-      MACOS_CERTIFICATE_P12: ${{ secrets.MACOS_CERTIFICATE_P12 }}
-      APPLE_ID: ${{ secrets.APPLE_ID }}
+      # Only whether signing is configured, never the secrets: PR code runs in this job (make check,
+      # make app), so each secret goes only to the step that needs it.
+      HAS_SIGNING: ${{ secrets.MACOS_CERTIFICATE_P12 != '' && 'true' || '' }}
+      HAS_NOTARY: ${{ secrets.MACOS_CERTIFICATE_P12 != '' && secrets.APPLE_ID != '' && 'true' || '' }}
     outputs:
       version: ${{ steps.version.outputs.version }}
       tag: ${{ steps.version.outputs.tag }}
@@ -110,8 +118,9 @@ jobs:
         run: make check
 
       - name: Import signing certificate
-        if: env.MACOS_CERTIFICATE_P12 != ''
+        if: env.HAS_SIGNING == 'true'
         env:
+          MACOS_CERTIFICATE_P12: ${{ secrets.MACOS_CERTIFICATE_P12 }}
           P12_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
           SIGNING_IDENTITY: ${{ secrets.MACOS_SIGNING_IDENTITY }}
         run: |
@@ -121,7 +130,7 @@ jobs:
           security create-keychain -p "$keychain_password" "$keychain"
           security set-keychain-settings -lut 21600 "$keychain"
           security unlock-keychain -p "$keychain_password" "$keychain"
-          security import "$RUNNER_TEMP/cert.p12" -P "$P12_PASSWORD" -A -t cert -f pkcs12 -k "$keychain"
+          security import "$RUNNER_TEMP/cert.p12" -P "$P12_PASSWORD" -T /usr/bin/codesign -t cert -f pkcs12 -k "$keychain"
           security set-key-partition-list -S apple-tool:,apple: -k "$keychain_password" "$keychain" > /dev/null
           security list-keychains -d user -s "$keychain" $(security list-keychains -d user | tr -d '"')
           rm "$RUNNER_TEMP/cert.p12"
@@ -136,8 +145,9 @@ jobs:
           (cd build && shasum -a 256 "$DMG_NAME" > "$DMG_NAME.sha256")
 
       - name: Notarize
-        if: env.MACOS_CERTIFICATE_P12 != '' && env.APPLE_ID != ''
+        if: env.HAS_NOTARY == 'true'
         env:
+          APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
           APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
         run: |
@@ -167,8 +177,8 @@ jobs:
       - name: Summary
         run: |
           signed="ad-hoc (unsigned)"
-          [ -n "$MACOS_CERTIFICATE_P12" ] && signed="Developer ID"
-          [ -n "$MACOS_CERTIFICATE_P12" ] && [ -n "$APPLE_ID" ] && signed="Developer ID, notarized"
+          [ -n "$HAS_SIGNING" ] && signed="Developer ID"
+          [ -n "$HAS_NOTARY" ] && signed="Developer ID, notarized"
           {
             echo "### 📦 $DMG_NAME"
             echo "- Channel: \`$CHANNEL\` · Version: \`$VERSION\` (build $BUILD_NUMBER)"
@@ -184,7 +194,7 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Clean up keychain
-        if: always() && env.MACOS_CERTIFICATE_P12 != ''
+        if: always() && env.HAS_SIGNING == 'true'
         run: security delete-keychain "$RUNNER_TEMP/signing.keychain-db" || true
 
   publish:
