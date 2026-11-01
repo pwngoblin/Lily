@@ -51,3 +51,17 @@ import WebKit
         #expect(ExtensionLibrary.describe("somethingNew") == "somethingNew")
     }
 }
+
+/// tabs.create and tabs.update share one rule: web pages and the extension's own pages only.
+@Suite struct ExtensionTabURLPolicyTests {
+    @available(macOS 15.4, *)
+    @Test func extensionsOpenOnlyWebPagesAndTheirOwnPages() {
+        let base = URL(string: "webkit-extension://abc123/")!
+        #expect(Tab.extensionMayOpen(URL(string: "https://example.com/")!, from: base))
+        #expect(Tab.extensionMayOpen(URL(string: "webkit-extension://ABC123/popup.html")!, from: base))
+        #expect(!Tab.extensionMayOpen(URL(string: "webkit-extension://other/options.html")!, from: base))
+        #expect(!Tab.extensionMayOpen(URL(fileURLWithPath: "/Users/me/Downloads/dummy.html"), from: base))
+        #expect(!Tab.extensionMayOpen(URL(string: "data:text/html,<h1>x</h1>")!, from: base))
+        #expect(!Tab.extensionMayOpen(URL(string: "javascript:alert(1)")!, from: base))
+    }
+}
