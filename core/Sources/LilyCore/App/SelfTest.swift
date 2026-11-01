@@ -335,6 +335,17 @@ enum SelfTest {
             check("selection cleared on navigation", selected && selecting.lastSelection == nil)
             window.tabs.close(selecting.id)
 
+            // A private window's "Open Link in Little Lily" stays in that private window: Little Lily
+            // windows use the regular profile.
+            let privateWindow = BrowserWindowController(factory: window.factory, assistant: assistant, history: nil, isPrivate: true)
+            var littleOpened = false
+            privateWindow.openLittle = { _ in littleOpened = true }
+            let privateOpener = privateWindow.tabs.create(url: nil)
+            privateWindow.tab(privateOpener, requestsLittleWith: URLRequest(url: URL(string: "https://selftest.lily.test/private-link")!))
+            check("private Little Lily link stays private", !littleOpened && privateWindow.tabs.tabs.count == 2
+                    && privateWindow.tabs.active?.url == URL(string: "https://selftest.lily.test/private-link"))
+            privateWindow.close()
+
             // Little Lily: a one-page window; Open in Lily moves the live page into the main window
             // (same web view, no reload: the page's load stamp, typed text and scroll position
             // survive), the small window closes, and the page's messages reach the main window.

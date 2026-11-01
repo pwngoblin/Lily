@@ -443,6 +443,11 @@ extension Tab: WKNavigationDelegate {
         let isLink = navigationAction.navigationType == .linkActivated
         let wantsNewTab = navigationAction.modifierFlags.contains(.command) || navigationAction.buttonNumber == 4 // middle click
         if isLink && wantsNewTab {
+            // A link in a frame passed the subframe rules above; as a new tab it's a top-level load.
+            if let url = navigationAction.request.url, !Self.isAllowedNewTab(url, openerExtension: webViewExtension) {
+                Log.web.info("Blocked a page-initiated new tab to \(url.scheme ?? "?", privacy: .public):")
+                return (.cancel, preferences)
+            }
             delegate?.tab(self, requestsNewTabWith: navigationAction.request,
                           inBackground: !navigationAction.modifierFlags.contains(.shift))
             return (.cancel, preferences)
@@ -516,6 +521,14 @@ extension Tab: WKNavigationDelegate {
         case "file": return allowedFile.map { $0.standardizedFileURL.path == url.standardizedFileURL.path } ?? false
         default: return true
         }
+    }
+
+    /// A tab a page asks for (window.open, target=_blank, cmd/middle-click) is a top-level load the
+    /// page chose, so it gets the top-level page rules: no `data:` or `file:`, and an extension page
+    /// only when the opener is that extension's own page.
+    nonisolated static func isAllowedNewTab(_ url: URL, openerExtension: String?) -> Bool {
+        if let host = WebViewFactory.extensionHost(url) { return host == openerExtension }
+        return isAllowedNavigation(url, isMainFrame: true, allowedData: nil, allowedFile: nil)
     }
 
     /// Shows one of Lily's own pages (errors). Its base URL is the page that failed when that's a
@@ -626,7 +639,12 @@ extension Tab: WKUIDelegate {
                         for navigationAction: WKNavigationAction, windowFeatures: WKWindowFeatures) -> WKWebView? {
         let target = linkTarget.flatMap { Date().timeIntervalSince($0.at) < 2 ? $0.target : nil }
         linkTarget = nil
-        if navigationAction.request.url != nil {
+        if let url = navigationAction.request.url {
+            // The new tab loads through `load`, which trusts its URL: apply the page rules here.
+            guard Self.isAllowedNewTab(url, openerExtension: webViewExtension) else {
+                Log.web.info("Blocked a page-initiated new tab to \(url.scheme ?? "?", privacy: .public):")
+                return nil
+            }
             switch target {
             case .split?: delegate?.tab(self, requestsSplitWith: navigationAction.request)
             case .little?: delegate?.tab(self, requestsLittleWith: navigationAction.request)
