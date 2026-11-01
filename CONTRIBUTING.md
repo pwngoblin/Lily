@@ -43,7 +43,7 @@ When one change builds on another, open PR B with PR A's branch as its base and 
 | a test build | **Actions → Build DMG → Run workflow** on `main`, channel `testing`: publishes pre-release `vX.Y.Z-testing.N` from the current `main`. |
 | a hotfix | A normal `fix/…` PR into `main`, then a `PATCH` bump PR. |
 
-Only the workflow creates `v*` tags, and published tags can't be moved or deleted (*release tags* ruleset).
+The workflow creates the `v*` tags; don't push them by hand. Once a tag exists it can't be moved or deleted (*release tags are immutable* ruleset).
 
 ## Branch hygiene
 
