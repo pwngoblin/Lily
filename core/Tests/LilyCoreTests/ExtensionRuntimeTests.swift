@@ -180,8 +180,8 @@ private func package(_ manifest: String, _ files: [String: String] = [:]) throws
 
     @Test func allFramesScriptsSkipCrossOriginFrames() {
         let main = URL(string: "https://Shop.example:443/cart")!
-        #expect(ExtensionScriptInjector.origin(main) == "https://shop.example")
-        #expect(ExtensionScriptInjector.origin(URL(string: "http://127.0.0.1:8001/")!) == "http://127.0.0.1:8001")
+        #expect(WebOrigin.of(main) == "https://shop.example")
+        #expect(WebOrigin.of(URL(string: "http://127.0.0.1:8001/")!) == "http://127.0.0.1:8001")
         let guarded = ExtensionScriptInjector.sameOriginFramesOnly("ran = true;", mainFrame: main)
         #expect(runs(guarded, top: true, origin: "https://anything.example"))   // the main frame itself
         #expect(runs(guarded, top: false, origin: "https://shop.example"))      // same-origin frame
@@ -191,7 +191,7 @@ private func package(_ manifest: String, _ files: [String: String] = [:]) throws
         #expect(ExtensionScriptInjector.startsStrict("\u{FEFF}/*! MIT License */\n// build 42\n\"use strict\";\nvar a"))
         #expect(!ExtensionScriptInjector.startsStrict("/* header */ var useStrict = 'use strict';"))
         #expect(ExtensionScriptInjector.startsStrict("// MIT\r\n// (c) 2026\r\n'use strict';\r\nvar a"))
-        #expect(ExtensionScriptInjector.origin(URL(string: "https://[::1]:8443/x")!) == "https://[::1]:8443")
-        #expect(FormDrafts.origin(URL(string: "https://Mail.example:443/compose")!) == "https://mail.example")
+        #expect(WebOrigin.of(URL(string: "https://[::1]:8443/x")!) == "https://[::1]:8443")
+        #expect(WebOrigin.of(URL(string: "https://Mail.example:443/compose")!) == "https://mail.example")
     }
 }

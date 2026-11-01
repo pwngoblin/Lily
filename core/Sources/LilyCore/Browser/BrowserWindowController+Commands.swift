@@ -52,7 +52,7 @@ extension BrowserWindowController: NSMenuItemValidation, NSToolbarItemValidation
     @objc public func restoreTypedText(_ sender: Any?) {
         guard let drafts = formDrafts, let tab = tabs.active, let url = tab.url else { return }
         let saved = drafts.drafts(for: url)
-        guard !saved.isEmpty, let origin = FormDrafts.origin(url) else { return }
+        guard !saved.isEmpty, let origin = WebOrigin.of(url) else { return }
         // tab.url can run ahead of the document that's still showing (a page starting navigations):
         // the page restores only if it really is the site the drafts belong to.
         let args: JSONValue = ["origin": .string(origin), "drafts": .array(saved.map { ["field": .string($0.field), "text": .string($0.text)] })]

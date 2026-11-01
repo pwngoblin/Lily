@@ -45,11 +45,6 @@ public final class FormDrafts {
         return "\(scheme)://\(host)\(port)\(path)"
     }
 
-    /// The origin drafts for `url` belong to, as `location.origin` writes it.
-    nonisolated static func origin(_ url: URL) -> String? {
-        ExtensionScriptInjector.origin(url)
-    }
-
     public func load() async {
         guard let file else { return }
         do {
