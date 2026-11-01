@@ -269,4 +269,19 @@ private func ollama(models: [String] = ["llama3.2:latest"], chat: @escaping @Sen
         let links = reply.runs.compactMap(\.link)
         #expect(links.contains(URL(string: "https://evil.example/login")!) && links.contains { $0.scheme == "lily-seek" })
     }
+
+    /// The link text must name the host as a whole domain; a host that is only part of the
+    /// text (`ypal.com` inside `paypal.com`) is still revealed.
+    @Test func hostHiddenInsideLinkTextIsRevealed() {
+        let cases = [
+            ("[paypal.com](https://ypal.com/login)", "paypal.com (ypal.com)"),
+            ("[paypal.com](https://www.al.com/login)", "paypal.com (www.al.com)"),
+            ("[Sign in at mybank.com](https://k.com/x)", "Sign in at mybank.com (k.com)"),
+            ("[Open www.paypal.com.](https://paypal.com/)", "Open www.paypal.com."),
+            ("[PayPal.com](https://www.paypal.com/)", "PayPal.com"),
+        ]
+        for (markdown, shown) in cases {
+            #expect(String(MarkdownRenderer.attributed(markdown).characters) == shown)
+        }
+    }
 }
