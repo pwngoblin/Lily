@@ -76,7 +76,7 @@ final class ExtensionLibrary {
         installed.first { $0.id == id }?.contentHash.map { String($0.prefix(12)) }
     }
 
-    /// Reads the sealed list (migrating the old UserDefaults copy once) and prepares every extension.
+    /// Reads the sealed list and prepares every extension.
     func loadAll() async {
         var trusted = true
         do {
@@ -88,10 +88,11 @@ final class ExtensionLibrary {
             lastError = "The list of installed extensions couldn't be verified, so no extensions were loaded. Add them again."
             installed = []
         }
-        if let legacy = UserDefaults.standard.data(forKey: Self.storageKey) {
-            if installed.isEmpty, let old = try? JSONDecoder().decode([InstalledExtension].self, from: legacy) { installed = old }
+        // The list once lived in UserDefaults, which any process can write: never adopt it (its records
+        // would load with their own grants and no audit or confirmation), only remove it.
+        if UserDefaults.standard.object(forKey: Self.storageKey) != nil {
             UserDefaults.standard.removeObject(forKey: Self.storageKey)
-            save()
+            Log.extensions.info("Ignored the old unsealed extensions list; add those extensions again")
         }
         for record in installed { await prepare(record) }
         // Copies no record points to (left when an earlier list couldn't be read and extensions were
@@ -217,8 +218,9 @@ final class ExtensionLibrary {
 
     /// Pins legacy installs, verifies the pinned copy against its hash, and (if enabled) makes it ready.
     private func prepare(_ record: InstalledExtension) async {
-        guard let record = await pinIfNeeded(record), let folderName = record.pinnedFolder, let expected = record.contentHash,
-              let folder = pinnedRoot?.appendingPathComponent(folderName, isDirectory: true) else { return }
+        // Pinned copies are always Extensions/<UUID>: anything else (a path with ../) isn't one.
+        guard let record = await pinIfNeeded(record), let folderName = record.pinnedFolder, UUID(uuidString: folderName) != nil,
+              let expected = record.contentHash, let folder = pinnedRoot?.appendingPathComponent(folderName, isDirectory: true) else { return }
         // The pinned copy must be exactly what was audited and approved.
         guard let package = await ExtensionLoader.verifiedPackage(at: folder, expectedHash: expected),
               let manifest = ExtensionManifest.parse(package) else {
