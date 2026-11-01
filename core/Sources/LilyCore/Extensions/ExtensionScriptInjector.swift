@@ -98,7 +98,7 @@ final class ExtensionScriptInjector {
     /// error ends a classic script without wrapping it, so its top-level declarations keep their
     /// meaning; a leading "use strict" is repeated before the guard so the script stays strict.
     nonisolated static func sameOriginFramesOnly(_ source: String, mainFrame url: URL?) -> String {
-        let origin = url.flatMap(Self.origin) ?? "null"
+        let origin = url.flatMap(WebOrigin.of) ?? "null"
         let literal = (try? String(decoding: JSONEncoder().encode([origin]), as: UTF8.self)).map { String($0.dropFirst().dropLast()) } ?? "\"null\""
         let strict = Self.startsStrict(source) ? "\"use strict\";" : ""
         return strict + "if (window !== window.top && location.origin !== \(literal)) "
@@ -120,14 +120,6 @@ final class ExtensionScriptInjector {
                 return rest.hasPrefix("\"use strict\"") || rest.hasPrefix("'use strict'")
             }
         }
-    }
-
-    /// An http(s) URL's origin as `location.origin` writes it; nil for others (file: is "null").
-    nonisolated static func origin(_ url: URL) -> String? {
-        guard let scheme = url.scheme?.lowercased(), scheme == "http" || scheme == "https", let host = url.host?.lowercased() else { return nil }
-        let defaultPort = scheme == "https" ? 443 : 80
-        let host6 = host.contains(":") ? "[\(host)]" : host
-        return "\(scheme)://\(host6)" + (url.port.map { $0 == defaultPort ? "" : ":\($0)" } ?? "")
     }
 
     /// A tab is closing: drop what was installed for it.
