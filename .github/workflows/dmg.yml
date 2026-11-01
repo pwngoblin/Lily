@@ -1,12 +1,14 @@
-# Builds, versions and publishes Lily.dmg.
+# Builds, versions and publishes Lily.dmg. Releases are cut from `main` and marked by tags; there
+# are no release branches, so nothing ever has to be merged "back" into main.
 #
-#   Pull request into `release` / `testing`  -> test, build the DMG, attach it to the run (Artifacts)
-#   Merge (push) into `release`              -> tag vX.Y.Z (from ./VERSION) and publish a GitHub Release
-#   Merge (push) into `testing`              -> tag vX.Y.Z-testing.N and publish a pre-release
+#   PR into `main` that changes ./VERSION  -> release candidate: test, build the DMG, attach it to the
+#   (or this workflow)                        run (Artifacts); a VERSION bump fails if tag vX.Y.Z exists
+#   That PR merged (push to `main`)        -> tag vX.Y.Z on the merge commit, publish the GitHub Release
+#   Actions -> Build DMG -> Run workflow   -> on `main` only: `testing` publishes pre-release
+#                                             vX.Y.Z-testing.N; `release` publishes vX.Y.Z if it's missing
 #
-# A release must bump ./VERSION: PRs into `release` fail early when tag vX.Y.Z already exists.
-#
-# Optional signing + notarization (otherwise the app is ad-hoc signed). Repository secrets:
+# Signing and notarization run only for builds of reviewed `main` (push / manual run), never for
+# PR code. Optional repository secrets (otherwise the app is ad-hoc signed):
 #   MACOS_CERTIFICATE_P12        base64 of a "Developer ID Application" .p12
 #   MACOS_CERTIFICATE_PASSWORD   password of that .p12
 #   MACOS_SIGNING_IDENTITY       e.g. "Developer ID Application: Jane Doe (TEAMID1234)"
@@ -15,10 +17,18 @@ name: Build DMG
 
 on:
   pull_request:
-    branches: [release, testing]
+    branches: [main]
+    paths: [VERSION, .github/workflows/dmg.yml] # a workflow change gets a candidate build too
   push:
-    branches: [release, testing]
+    branches: [main]
+    paths: [VERSION]
   workflow_dispatch:
+    inputs:
+      channel:
+        description: "testing: publish pre-release vX.Y.Z-testing.N. release: publish vX.Y.Z if it isn't released yet."
+        type: choice
+        options: [testing, release]
+        default: testing
 
 concurrency:
   group: dmg-${{ github.event.pull_request.number || github.ref }}
@@ -28,47 +38,23 @@ permissions:
   contents: read
 
 jobs:
-  # Promotion rules: testing and release only take changes from main (release also from hotfix/*).
-  source-guard:
-    name: source-guard
-    if: github.event_name == 'pull_request'
-    runs-on: ubuntu-latest
-    steps:
-      - name: Check where this PR comes from
-        # Branch names come from the PR author: pass them as environment variables (data), never
-        # interpolate them into the script, or a branch name like  x";curl${IFS}…|sh;"  runs code.
-        # The branch name alone proves nothing: a fork can name its branch main or hotfix/x.
-        env:
-          BASE_REF: ${{ github.base_ref }}
-          HEAD_REF: ${{ github.head_ref }}
-          HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
-          REPO: ${{ github.repository }}
-        run: |
-          base="$BASE_REF"; head="$HEAD_REF"
-          if [ "$HEAD_REPO" != "$REPO" ]; then
-            echo "::error::$base only takes PRs from branches of $REPO, not from $HEAD_REPO."; exit 1
-          fi
-          case "$base:$head" in
-            testing:main|release:main|release:hotfix/*) echo "$head -> $base is allowed" ;;
-            *) echo "::error::$head -> $base is not allowed. Merge features into main first, then open main -> $base (hotfix/* may target release)."; exit 1 ;;
-          esac
-
   build:
-    needs: source-guard
-    if: always() && (needs.source-guard.result == 'success' || needs.source-guard.result == 'skipped')
+    # Manual runs publish, so only from main (Run workflow lets you pick any branch).
+    if: github.event_name == 'pull_request' || github.ref == 'refs/heads/main'
     runs-on: macos-26
     timeout-minutes: 45
     env:
-      CHANNEL: ${{ github.base_ref || (github.event_name == 'push' && github.ref_name) || 'manual' }}
-      # Only whether signing is configured, never the secrets: PR code runs in this job (make check,
-      # make app), so each secret goes only to the step that needs it.
-      HAS_SIGNING: ${{ secrets.MACOS_CERTIFICATE_P12 != '' && 'true' || '' }}
-      HAS_NOTARY: ${{ secrets.MACOS_CERTIFICATE_P12 != '' && secrets.APPLE_ID != '' && 'true' || '' }}
+      CHANNEL: ${{ github.event_name == 'workflow_dispatch' && inputs.channel || (github.event_name == 'push' && 'release') || 'candidate' }}
+      # Only whether signing applies, never the secrets themselves: each secret goes only to the step
+      # that needs it, and PR runs (unreviewed code) never sign at all.
+      HAS_SIGNING: ${{ github.event_name != 'pull_request' && secrets.MACOS_CERTIFICATE_P12 != '' && 'true' || '' }}
+      HAS_NOTARY: ${{ github.event_name != 'pull_request' && secrets.MACOS_CERTIFICATE_P12 != '' && secrets.APPLE_ID != '' && 'true' || '' }}
     outputs:
       version: ${{ steps.version.outputs.version }}
       tag: ${{ steps.version.outputs.tag }}
       dmg: ${{ steps.version.outputs.dmg }}
       prerelease: ${{ steps.version.outputs.prerelease }}
+      released: ${{ steps.released.outputs.released }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -85,12 +71,11 @@ jobs:
           fi
           sha="$(echo "$COMMIT_SHA" | cut -c1-7)"
           case "$CHANNEL" in
-            release) tag="v$version"; prerelease=false
-                     if [ "${{ github.event_name }}" = push ]; then dmg="Lily-$version.dmg"
-                     else dmg="Lily-$version-rc.${{ github.run_number }}-$sha.dmg"; fi ;;
-            testing) tag="v$version-testing.${{ github.run_number }}"; prerelease=true
-                     dmg="Lily-$version-testing.${{ github.run_number }}-$sha.dmg" ;;
-            *)       tag=""; prerelease=true; dmg="Lily-$version-dev.${{ github.run_number }}-$sha.dmg" ;;
+            release)   tag="v$version"; prerelease=false; dmg="Lily-$version.dmg" ;;
+            candidate) tag="v$version"; prerelease=false; dmg="Lily-$version-rc.${{ github.run_number }}-$sha.dmg" ;;
+            testing)   tag="v$version-testing.${{ github.run_number }}"; prerelease=true
+                       dmg="Lily-$version-testing.${{ github.run_number }}-$sha.dmg" ;;
+            *)         echo "::error::unknown channel $CHANNEL"; exit 1 ;;
           esac
           {
             echo "version=$version"; echo "tag=$tag"; echo "dmg=$dmg"; echo "prerelease=$prerelease"
@@ -99,13 +84,24 @@ jobs:
             echo "VERSION=$version"; echo "BUILD_NUMBER=${{ github.run_number }}"; echo "DMG_NAME=$dmg"
           } >> "$GITHUB_ENV"
 
-      - name: Require a new version for releases
-        if: env.CHANNEL == 'release'
+      - name: Require a new version
+        id: released
+        if: env.CHANNEL != 'testing'
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
         run: |
           tag="${{ steps.version.outputs.tag }}"
           if git ls-remote --exit-code --tags origin "refs/tags/$tag" > /dev/null; then
-            echo "::error file=VERSION::$tag is already released. Bump VERSION (e.g. $(awk -F. '{print $1"."$2"."$3+1}' VERSION)) in this PR."
-            exit 1
+            if [ "$CHANNEL" = candidate ]; then
+              git fetch --quiet --depth 1 origin "$BASE_SHA"
+              if [ "$(git show "$BASE_SHA:VERSION" | tr -d '[:space:]')" != "${{ steps.version.outputs.version }}" ]; then
+                echo "::error file=VERSION::$tag is already released. Bump VERSION (e.g. $(awk -F. '{print $1"."$2"."$3+1}' VERSION)) in this PR."
+                exit 1
+              fi
+              echo "::notice::This PR doesn't change VERSION ($tag is released): a test build only."
+            fi
+            echo "::notice::$tag is already released; building only, nothing to publish."
+            echo "released=true" >> "$GITHUB_OUTPUT"
           fi
 
       - name: Show toolchain
@@ -164,7 +160,7 @@ jobs:
             build/${{ env.DMG_NAME }}.sha256
           if-no-files-found: error
           compression-level: 0
-          retention-days: ${{ env.CHANNEL == 'release' && 90 || 14 }}
+          retention-days: ${{ env.CHANNEL == 'release' && 90 || 14 }} # releases keep their DMG on the release page too
 
       - name: Upload symbols (not shipped in the DMG)
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
@@ -186,10 +182,12 @@ jobs:
             echo "- Signing: $signed"
             echo "- Size: $(du -h "build/$DMG_NAME" | cut -f1) · SHA-256: \`$(cut -d' ' -f1 "build/$DMG_NAME.sha256")\`"
             echo
-            if [ "${{ github.event_name }}" = push ]; then
-              echo "Publishing as **${{ steps.version.outputs.tag }}**."
+            if [ "$CHANNEL" = candidate ]; then
+              echo "Download it from **Artifacts** below. Merging this PR publishes it as **${{ steps.version.outputs.tag }}**."
+            elif [ "${{ steps.released.outputs.released }}" = true ]; then
+              echo "**${{ steps.version.outputs.tag }}** is already released: nothing to publish."
             else
-              echo "Download it from **Artifacts** below. Merging this PR publishes it as **${{ steps.version.outputs.tag || 'n/a' }}**."
+              echo "Publishing as **${{ steps.version.outputs.tag }}**."
             fi
           } >> "$GITHUB_STEP_SUMMARY"
 
@@ -199,7 +197,9 @@ jobs:
 
   publish:
     needs: build
-    if: github.event_name == 'push' && needs.build.outputs.tag != ''
+    # Explicit result checks: a bare condition also requires every earlier job to have *succeeded*,
+    # so one skipped job upstream used to skip publishing silently.
+    if: ${{ !cancelled() && needs.build.result == 'success' && github.event_name != 'pull_request' && needs.build.outputs.tag != '' && needs.build.outputs.released != 'true' }}
     runs-on: ubuntu-latest
     permissions:
       contents: write
