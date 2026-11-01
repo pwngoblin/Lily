@@ -1,5 +1,6 @@
 import CryptoKit
 import Foundation
+import os
 import Security
 
 /// Source of the symmetric key that encrypts app data at rest.
@@ -171,12 +172,19 @@ public struct SealedFile: Sendable {
         self.keys = keys
     }
 
+    /// Writes and deletes of one file land in the order they were asked for: a write still waiting
+    /// for its key when a newer write or a delete (Clear Browsing Data) happens is dropped, so a stale
+    /// snapshot can never bring back what was cleared.
     public func write(_ plaintext: Data) async throws {
+        let ticket = Self.order.withLock { $0.issue(url) }
         let key = try await keys.key(named: keyName)
         guard let sealed = try AES.GCM.seal(plaintext, using: key, authenticating: Data(purpose.utf8)).combined else {
             throw CocoaError(.fileWriteUnknown)
         }
-        try Self.writeProtected(sealed, to: url)
+        try Self.order.withLock { order in
+            guard order.commit(url, ticket) else { return }
+            try Self.writeProtected(sealed, to: url)
+        }
     }
 
     /// Returns nil when the file doesn't exist. Throws when it exists but fails authentication.
@@ -187,8 +195,34 @@ public struct SealedFile: Sendable {
     }
 
     public func delete() {
-        try? FileManager.default.removeItem(at: url)
+        Self.order.withLock { order in
+            order.invalidate(url)
+            try? FileManager.default.removeItem(at: url)
+        }
     }
+
+    /// Per file: the last write ticket handed out, and the newest one that may no longer land.
+    struct WriteOrder {
+        private var issued: [String: UInt64] = [:]
+        private var floor: [String: UInt64] = [:]
+
+        mutating func issue(_ url: URL) -> UInt64 {
+            let ticket = issued[url.path, default: 0] + 1
+            issued[url.path] = ticket
+            return ticket
+        }
+
+        /// True when `ticket` is newer than anything written or deleted since; it then becomes the floor.
+        mutating func commit(_ url: URL, _ ticket: UInt64) -> Bool {
+            guard ticket > floor[url.path, default: 0] else { return false }
+            floor[url.path] = ticket
+            return true
+        }
+
+        mutating func invalidate(_ url: URL) { floor[url.path] = issued[url.path, default: 0] }
+    }
+
+    private static let order = OSAllocatedUnfairLock(initialState: WriteOrder())
 
     static func writeProtected(_ data: Data, to url: URL) throws {
         try data.write(to: url, options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication])
