@@ -132,6 +132,17 @@ enum SelfTest {
             check("form recovery", saved && drafts.map(\.field) == ["textarea#body"] && drafts.first?.page == "https://selftest.lily.test/compose"
                   && offered && refilled == typed,
                   ["fields": .array(drafts.map { .string($0.field) }), "offered": .bool(offered), "restored": .bool(refilled == typed)])
+            // Drafts are only restored into the site they belong to: another site's page showing in
+            // the tab (its address ran ahead) gets nothing.
+            formTab.webView.loadHTMLString(compose, baseURL: URL(string: "https://other.selftest.lily.test/compose")!)
+            for _ in 0..<50 { // the document itself, not just the tab's address
+                if (try? await formTab.webView.evaluateJavaScript("location.host")) as? String == "other.selftest.lily.test" { break }
+                try? await Task.sleep(for: .milliseconds(100))
+            }
+            let foreign = try? await formTab.callInjection("form.restore", ["origin": "https://selftest.lily.test",
+                                                                            "drafts": [["field": "textarea#body", "text": "secret draft"]]])
+            let foreignBody = (try? await formTab.webView.evaluateJavaScript("document.getElementById('body').value")) as? String
+            check("form restore stays on its site", foreign?["restored"]?.int == 0 && foreignBody == "")
             window.formDrafts?.removeAll()
             window.tabs.close(formTab.id)
 

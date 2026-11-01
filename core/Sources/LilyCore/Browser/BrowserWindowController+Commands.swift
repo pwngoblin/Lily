@@ -52,8 +52,10 @@ extension BrowserWindowController: NSMenuItemValidation, NSToolbarItemValidation
     @objc public func restoreTypedText(_ sender: Any?) {
         guard let drafts = formDrafts, let tab = tabs.active, let url = tab.url else { return }
         let saved = drafts.drafts(for: url)
-        guard !saved.isEmpty else { return }
-        let args: JSONValue = ["drafts": .array(saved.map { ["field": .string($0.field), "text": .string($0.text)] })]
+        guard !saved.isEmpty, let origin = FormDrafts.origin(url) else { return }
+        // tab.url can run ahead of the document that's still showing (a page starting navigations):
+        // the page restores only if it really is the site the drafts belong to.
+        let args: JSONValue = ["origin": .string(origin), "drafts": .array(saved.map { ["field": .string($0.field), "text": .string($0.text)] })]
         Task { [weak self] in
             let restored = (try? await tab.callInjection("form.restore", args))?["restored"]?.int ?? 0
             self?.model.showToast(restored > 0 ? "Restored the text you typed" : "Nothing restored: those fields already have text")
