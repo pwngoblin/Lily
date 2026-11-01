@@ -45,6 +45,12 @@ public final class FormDrafts {
         return "\(scheme)://\(host)\(port)\(path)"
     }
 
+    /// The origin drafts for `url` belong to, as `location.origin` writes it.
+    nonisolated static func origin(_ url: URL) -> String? {
+        guard let scheme = url.scheme?.lowercased(), scheme == "https" || scheme == "http", let host = url.host?.lowercased() else { return nil }
+        return "\(scheme)://\(host)" + (url.port.map { ":\($0)" } ?? "")
+    }
+
     public func load() async {
         guard let file else { return }
         do {
