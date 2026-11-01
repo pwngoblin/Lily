@@ -1,9 +1,9 @@
 // Collects page metadata and reports navigation (including SPA URL changes) to core.
 (() => {
   "use strict";
-  const arc = window.__arc;
-  if (!arc || window.__arcPageMetadata) return;
-  window.__arcPageMetadata = true;
+  const lily = window.__lily;
+  if (!lily || window.__lilyPageMetadata) return;
+  window.__lilyPageMetadata = true;
 
   function meta(selector) {
     const el = document.querySelector(selector);
@@ -58,13 +58,27 @@
     };
   }
 
-  arc.register("page.metadata", collect);
+  lily.register("page.metadata", collect);
 
   let lastURL = location.href;
   let lastTitle = document.title;
 
+  // A page can rewrite its title thousands of times a second; report at most every 500 ms
+  // (the latest state wins).
+  let pending = null;
+  let lastReport = 0;
   function report(reason) {
-    arc.emit("page.didChange", { reason, ...collect() });
+    const wait = 500 - (Date.now() - lastReport);
+    if (wait <= 0) {
+      lastReport = Date.now();
+      lily.emit("page.didChange", { reason, ...collect() });
+    } else if (!pending) {
+      pending = setTimeout(() => {
+        pending = null;
+        lastReport = Date.now();
+        lily.emit("page.didChange", { reason, ...collect() });
+      }, wait);
+    }
   }
 
   report("load");
@@ -74,8 +88,12 @@
   window.addEventListener("hashchange", () => check("hashchange"));
   document.addEventListener("yt-navigate-finish", () => setTimeout(() => check("spa"), 50));
 
-  // history.pushState patched in the page world is invisible here, so poll cheaply.
-  setInterval(() => check("poll"), 1000);
+  // history.pushState in the page world is invisible here. Instead of polling (a timer in every
+  // tab keeps the CPU from idling), native code observes the URL and calls this when it changes.
+  lily.register("page.recheck", () => {
+    check("navigation");
+    return null;
+  });
 
   const titleEl = document.querySelector("title");
   if (titleEl) {

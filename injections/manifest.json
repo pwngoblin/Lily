@@ -1,41 +1,107 @@
 {
   "version": 1,
-  "contentWorld": "ArcInjections",
+  "contentWorld": "LilyInjections",
   "scripts": [
     {
       "id": "runtime",
       "file": "modules/runtime.js",
       "injectionTime": "documentStart",
       "mainFrameOnly": false,
-      "matches": ["*"]
+      "matches": [
+        "*"
+      ]
     },
     {
       "id": "page-metadata",
       "file": "modules/page-metadata.js",
       "injectionTime": "documentEnd",
       "mainFrameOnly": true,
-      "matches": ["*"]
+      "matches": [
+        "*"
+      ]
     },
     {
       "id": "dom-extractor",
       "file": "modules/dom-extractor.js",
       "injectionTime": "documentEnd",
       "mainFrameOnly": true,
-      "matches": ["*"]
+      "matches": [
+        "*"
+      ]
+    },
+    {
+      "id": "dark-mode",
+      "file": "modules/dark-mode.js",
+      "injectionTime": "documentEnd",
+      "mainFrameOnly": true,
+      "matches": [
+        "*"
+      ]
     },
     {
       "id": "selection-capture",
       "file": "modules/selection-capture.js",
       "injectionTime": "documentEnd",
       "mainFrameOnly": false,
-      "matches": ["*"]
+      "matches": [
+        "*"
+      ]
     },
     {
       "id": "youtube-transcript",
       "file": "modules/youtube-transcript.js",
       "injectionTime": "documentEnd",
       "mainFrameOnly": true,
-      "matches": ["youtube.com", "*.youtube.com"]
+      "matches": [
+        "youtube.com",
+        "*.youtube.com"
+      ]
+    },
+    {
+      "id": "youtube-adblock",
+      "file": "modules/youtube-adblock.js",
+      "injectionTime": "documentEnd",
+      "mainFrameOnly": true,
+      "matches": [
+        "youtube.com",
+        "*.youtube.com"
+      ]
+    },
+    {
+      "id": "cosmetic-filter",
+      "file": "modules/cosmetic-filter.js",
+      "injectionTime": "documentEnd",
+      "mainFrameOnly": true,
+      "matches": [
+        "*"
+      ]
+    },
+    {
+      "id": "form-recovery",
+      "file": "modules/form-recovery.js",
+      "injectionTime": "documentEnd",
+      "mainFrameOnly": true,
+      "matches": [
+        "*"
+      ]
+    },
+    {
+      "id": "scroll-sync",
+      "file": "modules/scroll-sync.js",
+      "injectionTime": "documentEnd",
+      "mainFrameOnly": true,
+      "matches": [
+        "*"
+      ]
+    },
+    {
+      "id": "find-count",
+      "file": "modules/find-count.js",
+      "injectionTime": "documentEnd",
+      "mainFrameOnly": true,
+      "matches": [
+        "*"
+      ]
     }
   ]
 }

@@ -1,5 +1,10 @@
-# Builds a distributable ArcClone.dmg for every pull request into `release` or `testing`.
-# The DMG is attached to the workflow run as an artifact (see the run's Summary page).
+# Builds, versions and publishes Lily.dmg.
+#
+#   Pull request into `release` / `testing`  -> test, build the DMG, attach it to the run (Artifacts)
+#   Merge (push) into `release`              -> tag vX.Y.Z (from ./VERSION) and publish a GitHub Release
+#   Merge (push) into `testing`              -> tag vX.Y.Z-testing.N and publish a pre-release
+#
+# A release must bump ./VERSION: PRs into `release` fail early when tag vX.Y.Z already exists.
 #
 # Optional signing + notarization (otherwise the app is ad-hoc signed). Repository secrets:
 #   MACOS_CERTIFICATE_P12        base64 of a "Developer ID Application" .p12
@@ -11,31 +16,97 @@ name: Build DMG
 on:
   pull_request:
     branches: [release, testing]
+  push:
+    branches: [release, testing]
   workflow_dispatch:
 
 concurrency:
   group: dmg-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
   contents: read
 
 jobs:
-  dmg:
+  # Promotion rules: testing and release only take changes from main (release also from hotfix/*).
+  source-guard:
+    name: source-guard
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check where this PR comes from
+        # Branch names come from the PR author: pass them as environment variables (data), never
+        # interpolate them into the script, or a branch name like  x";curl${IFS}…|sh;"  runs code.
+        # The branch name alone proves nothing: a fork can name its branch main or hotfix/x.
+        env:
+          BASE_REF: ${{ github.base_ref }}
+          HEAD_REF: ${{ github.head_ref }}
+          HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
+          REPO: ${{ github.repository }}
+        run: |
+          base="$BASE_REF"; head="$HEAD_REF"
+          if [ "$HEAD_REPO" != "$REPO" ]; then
+            echo "::error::$base only takes PRs from branches of $REPO, not from $HEAD_REPO."; exit 1
+          fi
+          case "$base:$head" in
+            testing:main|release:main|release:hotfix/*) echo "$head -> $base is allowed" ;;
+            *) echo "::error::$head -> $base is not allowed. Merge features into main first, then open main -> $base (hotfix/* may target release)."; exit 1 ;;
+          esac
+
+  build:
+    needs: source-guard
+    if: always() && (needs.source-guard.result == 'success' || needs.source-guard.result == 'skipped')
     runs-on: macos-26
     timeout-minutes: 45
     env:
-      CHANNEL: ${{ github.base_ref || 'manual' }}
-      MACOS_CERTIFICATE_P12: ${{ secrets.MACOS_CERTIFICATE_P12 }}
-      APPLE_ID: ${{ secrets.APPLE_ID }}
+      CHANNEL: ${{ github.base_ref || (github.event_name == 'push' && github.ref_name) || 'manual' }}
+      # Only whether signing is configured, never the secrets: PR code runs in this job (make check,
+      # make app), so each secret goes only to the step that needs it.
+      HAS_SIGNING: ${{ secrets.MACOS_CERTIFICATE_P12 != '' && 'true' || '' }}
+      HAS_NOTARY: ${{ secrets.MACOS_CERTIFICATE_P12 != '' && secrets.APPLE_ID != '' && 'true' || '' }}
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      tag: ${{ steps.version.outputs.tag }}
+      dmg: ${{ steps.version.outputs.dmg }}
+      prerelease: ${{ steps.version.outputs.prerelease }}
     steps:
-      - uses: actions/checkout@v4
-
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          node-version: 22
-          cache: npm
-          cache-dependency-path: ui/package-lock.json
+          persist-credentials: false # the build never pushes; only the publish job needs the token
+
+      - name: Compute version
+        id: version
+        env:
+          COMMIT_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          version="$(tr -d '[:space:]' < VERSION)"
+          if ! [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error file=VERSION::VERSION must be MAJOR.MINOR.PATCH, got '$version'"; exit 1
+          fi
+          sha="$(echo "$COMMIT_SHA" | cut -c1-7)"
+          case "$CHANNEL" in
+            release) tag="v$version"; prerelease=false
+                     if [ "${{ github.event_name }}" = push ]; then dmg="Lily-$version.dmg"
+                     else dmg="Lily-$version-rc.${{ github.run_number }}-$sha.dmg"; fi ;;
+            testing) tag="v$version-testing.${{ github.run_number }}"; prerelease=true
+                     dmg="Lily-$version-testing.${{ github.run_number }}-$sha.dmg" ;;
+            *)       tag=""; prerelease=true; dmg="Lily-$version-dev.${{ github.run_number }}-$sha.dmg" ;;
+          esac
+          {
+            echo "version=$version"; echo "tag=$tag"; echo "dmg=$dmg"; echo "prerelease=$prerelease"
+          } >> "$GITHUB_OUTPUT"
+          {
+            echo "VERSION=$version"; echo "BUILD_NUMBER=${{ github.run_number }}"; echo "DMG_NAME=$dmg"
+          } >> "$GITHUB_ENV"
+
+      - name: Require a new version for releases
+        if: env.CHANNEL == 'release'
+        run: |
+          tag="${{ steps.version.outputs.tag }}"
+          if git ls-remote --exit-code --tags origin "refs/tags/$tag" > /dev/null; then
+            echo "::error file=VERSION::$tag is already released. Bump VERSION (e.g. $(awk -F. '{print $1"."$2"."$3+1}' VERSION)) in this PR."
+            exit 1
+          fi
 
       - name: Show toolchain
         run: |
@@ -44,21 +115,12 @@ jobs:
           swift --version
 
       - name: Test
-        run: make test-bridge test-ui test-core
-
-      - name: Compute version
-        run: |
-          version="$(cat VERSION)"
-          sha="$(echo "${{ github.event.pull_request.head.sha || github.sha }}" | cut -c1-7)"
-          {
-            echo "VERSION=$version"
-            echo "BUILD_NUMBER=${{ github.run_number }}"
-            echo "DMG_NAME=ArcClone-$version-$CHANNEL.${{ github.run_number }}-$sha.dmg"
-          } >> "$GITHUB_ENV"
+        run: make check
 
       - name: Import signing certificate
-        if: env.MACOS_CERTIFICATE_P12 != ''
+        if: env.HAS_SIGNING == 'true'
         env:
+          MACOS_CERTIFICATE_P12: ${{ secrets.MACOS_CERTIFICATE_P12 }}
           P12_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
           SIGNING_IDENTITY: ${{ secrets.MACOS_SIGNING_IDENTITY }}
         run: |
@@ -68,7 +130,7 @@ jobs:
           security create-keychain -p "$keychain_password" "$keychain"
           security set-keychain-settings -lut 21600 "$keychain"
           security unlock-keychain -p "$keychain_password" "$keychain"
-          security import "$RUNNER_TEMP/cert.p12" -P "$P12_PASSWORD" -A -t cert -f pkcs12 -k "$keychain"
+          security import "$RUNNER_TEMP/cert.p12" -P "$P12_PASSWORD" -T /usr/bin/codesign -t cert -f pkcs12 -k "$keychain"
           security set-key-partition-list -S apple-tool:,apple: -k "$keychain_password" "$keychain" > /dev/null
           security list-keychains -d user -s "$keychain" $(security list-keychains -d user | tr -d '"')
           rm "$RUNNER_TEMP/cert.p12"
@@ -78,41 +140,92 @@ jobs:
         run: UNIVERSAL=1 make app
 
       - name: Build DMG
-        run: ./scripts/make-dmg.sh "build/$DMG_NAME"
+        run: |
+          ./scripts/make-dmg.sh "build/$DMG_NAME"
+          (cd build && shasum -a 256 "$DMG_NAME" > "$DMG_NAME.sha256")
 
       - name: Notarize
-        if: env.MACOS_CERTIFICATE_P12 != '' && env.APPLE_ID != ''
+        if: env.HAS_NOTARY == 'true'
         env:
+          APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
           APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
         run: |
           xcrun notarytool submit "build/$DMG_NAME" --apple-id "$APPLE_ID" --team-id "$APPLE_TEAM_ID" \
             --password "$APPLE_APP_PASSWORD" --wait
           xcrun stapler staple "build/$DMG_NAME"
+          (cd build && shasum -a 256 "$DMG_NAME" > "$DMG_NAME.sha256")
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: ${{ env.DMG_NAME }}
-          path: build/${{ env.DMG_NAME }}
+          path: |
+            build/${{ env.DMG_NAME }}
+            build/${{ env.DMG_NAME }}.sha256
           if-no-files-found: error
           compression-level: 0
           retention-days: ${{ env.CHANNEL == 'release' && 90 || 14 }}
 
+      - name: Upload symbols (not shipped in the DMG)
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: ${{ env.DMG_NAME }}.dSYM
+          path: build/Lily.app.dSYM
+          if-no-files-found: warn
+          retention-days: 90
+
       - name: Summary
         run: |
           signed="ad-hoc (unsigned)"
-          [ -n "$MACOS_CERTIFICATE_P12" ] && signed="Developer ID"
-          [ -n "$MACOS_CERTIFICATE_P12" ] && [ -n "$APPLE_ID" ] && signed="Developer ID, notarized"
+          [ -n "$HAS_SIGNING" ] && signed="Developer ID"
+          [ -n "$HAS_NOTARY" ] && signed="Developer ID, notarized"
           {
             echo "### 📦 $DMG_NAME"
             echo "- Channel: \`$CHANNEL\` · Version: \`$VERSION\` (build $BUILD_NUMBER)"
-            echo "- Architectures: $(lipo -archs build/ArcClone.app/Contents/MacOS/ArcClone)"
+            echo "- Architectures: $(lipo -archs build/Lily.app/Contents/MacOS/Lily)"
             echo "- Signing: $signed"
-            echo "- Size: $(du -h "build/$DMG_NAME" | cut -f1)"
+            echo "- Size: $(du -h "build/$DMG_NAME" | cut -f1) · SHA-256: \`$(cut -d' ' -f1 "build/$DMG_NAME.sha256")\`"
             echo
-            echo "Download it from **Artifacts** below."
+            if [ "${{ github.event_name }}" = push ]; then
+              echo "Publishing as **${{ steps.version.outputs.tag }}**."
+            else
+              echo "Download it from **Artifacts** below. Merging this PR publishes it as **${{ steps.version.outputs.tag || 'n/a' }}**."
+            fi
           } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Clean up keychain
-        if: always() && env.MACOS_CERTIFICATE_P12 != ''
+        if: always() && env.HAS_SIGNING == 'true'
         run: security delete-keychain "$RUNNER_TEMP/signing.keychain-db" || true
+
+  publish:
+    needs: build
+    if: github.event_name == 'push' && needs.build.outputs.tag != ''
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      TAG: ${{ needs.build.outputs.tag }}
+      VERSION: ${{ needs.build.outputs.version }}
+      DMG: ${{ needs.build.outputs.dmg }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: ${{ needs.build.outputs.dmg }}
+          path: dist
+
+      - name: Tag ${{ needs.build.outputs.tag }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag -a "$TAG" -m "Lily $TAG" "$GITHUB_SHA"
+          git push origin "refs/tags/$TAG"
+
+      - name: Publish GitHub release
+        run: |
+          flags=(--verify-tag --generate-notes --title "Lily ${TAG#v}")
+          if [ "${{ needs.build.outputs.prerelease }}" = true ]; then flags+=(--prerelease); else flags+=(--latest); fi
+          gh release create "$TAG" "${flags[@]}" "dist/$DMG" "dist/$DMG.sha256"
+          echo "Published [$TAG]($(gh release view "$TAG" --json url -q .url))" >> "$GITHUB_STEP_SUMMARY"

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Packages a release ArcClone.app into ./build. Resources are copied into
-# Contents/Resources/ArcClone so AppPaths finds them without ARCCLONE_ROOT.
+# Packages a release Lily.app into ./build. Resources are copied into
+# Contents/Resources/Lily so AppPaths finds them without LILY_ROOT.
 #
 # Environment:
 #   VERSION            marketing version (default: contents of ./VERSION)
@@ -8,34 +8,41 @@
 #   UNIVERSAL=1        build arm64 + x86_64 (default: host architecture only)
 #   CODESIGN_IDENTITY  signing identity, e.g. "Developer ID Application: …" (default: ad-hoc "-")
 set -euo pipefail
+# Never trust an inherited PATH: only the system tool directories (Xcode tools are shims in /usr/bin).
+export PATH="/usr/bin:/bin:/usr/sbin:/sbin"
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-OUT="$ROOT/build/ArcClone.app"
-RES="$OUT/Contents/Resources/ArcClone"
+OUT="$ROOT/build/Lily.app"
+RES="$OUT/Contents/Resources/Lily"
 VERSION="${VERSION:-$(cat "$ROOT/VERSION")}"
 BUILD_NUMBER="${BUILD_NUMBER:-1}"
 IDENTITY="${CODESIGN_IDENTITY:--}"
 
-[ -f "$ROOT/ui/dist/index.html" ] || { echo "ui/dist missing: run 'make ui' first" >&2; exit 1; }
-
 ARCH_FLAGS=()
 [ "${UNIVERSAL:-0}" = "1" ] && ARCH_FLAGS=(--arch arm64 --arch x86_64)
-(cd "$ROOT/core" && swift build -c release ${ARCH_FLAGS[@]+"${ARCH_FLAGS[@]}"})
-BIN="$(cd "$ROOT/core" && swift build -c release ${ARCH_FLAGS[@]+"${ARCH_FLAGS[@]}"} --show-bin-path)/ArcClone"
+# Release: -O (SwiftPM's release default), full link-time optimization and dead-code stripping.
+RELEASE_FLAGS=(-c release --experimental-lto-mode=full -Xlinker -dead_strip)
+(cd "$ROOT/core" && swift build "${RELEASE_FLAGS[@]}" ${ARCH_FLAGS[@]+"${ARCH_FLAGS[@]}"})
+BIN="$(cd "$ROOT/core" && swift build "${RELEASE_FLAGS[@]}" ${ARCH_FLAGS[@]+"${ARCH_FLAGS[@]}"} --show-bin-path)/Lily"
 
 rm -rf "$OUT"
-mkdir -p "$OUT/Contents/MacOS" "$RES/ui" "$RES/agent-bridge"
-cp "$BIN" "$OUT/Contents/MacOS/ArcClone"
+mkdir -p "$OUT/Contents/MacOS" "$RES"
+cp "$BIN" "$OUT/Contents/MacOS/Lily"
+EXE="$OUT/Contents/MacOS/Lily"
+# Drop every rpath except the OS Swift runtime: toolchain paths baked in by the linker are a
+# dylib-hijacking surface and nothing loads through @rpath.
+# sort -u: a universal binary lists each slice's rpaths, and one delete removes it from every slice.
+for rpath in $(otool -l "$EXE" | awk '/cmd LC_RPATH/{getline; getline; print $2}' | sort -u); do
+  [ "$rpath" = "/usr/lib/swift" ] || install_name_tool -delete_rpath "$rpath" "$EXE"
+done
+# Keep symbols for crash reports in a dSYM next to the app (never shipped), then strip the binary.
+rm -rf "$ROOT/build/Lily.app.dSYM"
+dsymutil "$EXE" -o "$ROOT/build/Lily.app.dSYM" 2>/dev/null || echo "warning: dsymutil failed" >&2
+strip -rSTx "$EXE"
 cp -R "$ROOT/injections" "$RES/injections"
-cp -R "$ROOT/ui/dist" "$RES/ui/dist"
-cp -R "$ROOT/agent-bridge/src" "$RES/agent-bridge/src"
-cp "$ROOT/agent-bridge/package.json" "$RES/agent-bridge/package.json"
 find "$OUT" -name .DS_Store -delete
 
-ICONSET="$(mktemp -d)/AppIcon.iconset"
-swift "$ROOT/scripts/make-icon.swift" "$ICONSET"
-iconutil -c icns "$ICONSET" -o "$OUT/Contents/Resources/AppIcon.icns"
-rm -rf "$(dirname "$ICONSET")"
+swift "$ROOT/scripts/make-icon.swift" "$OUT/Contents/Resources/AppIcon.icns"
 
 cat > "$OUT/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
@@ -43,10 +50,10 @@ cat > "$OUT/Contents/Info.plist" <<PLIST
 <plist version="1.0">
 <dict>
   <key>CFBundleInfoDictionaryVersion</key><string>6.0</string>
-  <key>CFBundleName</key><string>ArcClone</string>
-  <key>CFBundleDisplayName</key><string>ArcClone</string>
-  <key>CFBundleIdentifier</key><string>dev.arcclone.browser</string>
-  <key>CFBundleExecutable</key><string>ArcClone</string>
+  <key>CFBundleName</key><string>Lily</string>
+  <key>CFBundleDisplayName</key><string>Lily</string>
+  <key>CFBundleIdentifier</key><string>dev.lily.browser</string>
+  <key>CFBundleExecutable</key><string>Lily</string>
   <key>CFBundleIconFile</key><string>AppIcon</string>
   <key>CFBundlePackageType</key><string>APPL</string>
   <key>CFBundleShortVersionString</key><string>$VERSION</string>
@@ -54,7 +61,7 @@ cat > "$OUT/Contents/Info.plist" <<PLIST
   <key>CFBundleDevelopmentRegion</key><string>en</string>
   <key>LSMinimumSystemVersion</key><string>14.0</string>
   <key>LSApplicationCategoryType</key><string>public.app-category.productivity</string>
-  <key>NSHumanReadableCopyright</key><string>© $(date +%Y) ArcClone contributors</string>
+  <key>NSHumanReadableCopyright</key><string>© $(date +%Y) Lily contributors</string>
   <key>NSHighResolutionCapable</key><true/>
   <key>NSPrincipalClass</key><string>NSApplication</string>
   <key>NSSupportsAutomaticTermination</key><false/>
@@ -66,10 +73,17 @@ cat > "$OUT/Contents/Info.plist" <<PLIST
   <!-- A browser must load any site; ATS still applies to the app's own connections. -->
   <key>NSAppTransportSecurity</key>
   <dict><key>NSAllowsArbitraryLoadsInWebContent</key><true/></dict>
+  <!-- A tab dragged in the sidebar (TabDragDrop.swift); only ever offered inside the app. -->
+  <key>UTExportedTypeDeclarations</key>
+  <array><dict>
+    <key>UTTypeIdentifier</key><string>dev.lily.browser.tab</string>
+    <key>UTTypeDescription</key><string>Lily Tab</string>
+    <key>UTTypeConformsTo</key><array><string>public.data</string></array>
+  </dict></array>
   <!-- Handoff: continue the active tab in Safari on another device. -->
   <key>NSUserActivityTypes</key>
   <array><string>NSUserActivityTypeBrowsingWeb</string></array>
-  <!-- URL schemes plus HTML documents make ArcClone eligible as the default browser. -->
+  <!-- URL schemes plus HTML documents make Lily eligible as the default browser. -->
   <key>CFBundleURLTypes</key>
   <array><dict>
     <key>CFBundleURLName</key><string>Web URL</string>
@@ -88,8 +102,10 @@ cat > "$OUT/Contents/Info.plist" <<PLIST
 PLIST
 plutil -lint -s "$OUT/Contents/Info.plist"
 
-SIGN_FLAGS=(--force --options runtime --entitlements "$ROOT/scripts/ArcClone.entitlements" --sign "$IDENTITY")
+# runtime: hardened runtime; library: only Apple- or same-team-signed libraries load;
+# restrict: dyld ignores DYLD_* variables and the binary refuses debugger-style injection.
+SIGN_FLAGS=(--force --options runtime,library,restrict --entitlements "$ROOT/scripts/Lily.entitlements" --sign "$IDENTITY")
 [ "$IDENTITY" != "-" ] && SIGN_FLAGS+=(--timestamp)
 codesign "${SIGN_FLAGS[@]}" "$OUT"
-codesign --verify --strict "$OUT"
-echo "Built $OUT ($VERSION, build $BUILD_NUMBER, $(lipo -archs "$OUT/Contents/MacOS/ArcClone"))"
+"$ROOT/scripts/verify-app.sh" "$OUT"
+echo "Built $OUT ($VERSION, build $BUILD_NUMBER, $(lipo -archs "$OUT/Contents/MacOS/Lily"))"

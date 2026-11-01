@@ -1,0 +1,159 @@
+# Browser extensions in Lily
+
+Most extensions ship as compiled packages from a store, not as source you can review. Lily's approach, in order of preference:
+
+1. **Build it in.** Write a small first-party module (Swift, plus an injected script if the page has to be touched).
+2. **Audit and pin.** If a third-party extension is truly needed, add it as a reviewed, pinned copy that never changes on its own.
+3. **Isolate at runtime.** Whatever runs, it can't reach Lily's native bridge, and it can't load code that wasn't reviewed.
+
+## 1. Prefer first-party modules
+
+Many popular extensions duplicate features Lily already has:
+
+| Instead of… | Use |
+|---|---|
+| An ad or tracker blocker | Settings → Privacy: the built-in list plus EasyList, EasyPrivacy, uBlock filters, Peter Lowe's list or AdGuard Annoyances (`core/Sources/LilyCore/AdBlock/`) |
+| A YouTube ad skipper | Built in (`injections/modules/youtube-adblock.js`) |
+| A dark-mode extension | Dark mode for websites, ⌥⌘D (`injections/modules/dark-mode.js`) |
+| An HTTPS-upgrade extension | HTTPS-First (Settings → Privacy) |
+| A summarizer or AI sidebar | The assistant, ⌘E (local Ollama) |
+
+For anything else, add a module. The pattern every existing module follows:
+
+**Page side: `injections/modules/<name>.js`**
+- Wrap the module in an IIFE that exits if `window.__lily` is missing or the module already ran (see `cosmetic-filter.js`).
+- Talk to native code only through `window.__lily`:
+  - `lily.send(type, payload)` makes a request.
+  - `lily.emit(type, payload)` fires an event.
+  - `lily.register(name, fn)` lets native code call into the page.
+- Treat everything native code sends as data, never as code. No `eval`, `new Function`, string timers, `innerHTML` or `setInterval`; `scripts/security-lint.sh` rejects them.
+- React to page changes with a `MutationObserver` and debounce with `setTimeout`, or let native code call you (`page.recheck`). Never poll.
+
+**Manifest: `injections/manifest.json`**
+- Add `{ "id", "file", "injectionTime", "mainFrameOnly", "matches" }`. Limit `matches` to the hosts you need (for example `["youtube.com", "*.youtube.com"]`); `InjectionManifest.validate()` enforces the grammar.
+- All modules run in the isolated `LilyInjections` content world. Page scripts can't see or modify them.
+
+**Native side: `core/Sources/LilyCore/Handlers/`**
+- Register a route with `router.on("<module>.<message>", from: [.page], as: YourPayload.self) { ctx, payload in … }` in `PageHandlers.swift`.
+- Decode the payload into a fixed `Decodable` schema with length limits (`PagePayloads.swift`). Unknown or oversized messages are refused before they're parsed.
+- Use the origin from `ctx.source`, which WebKit sets from the frame's real security origin, never a URL the page reports. `PagePayload.sameOrigin` rejects mismatches.
+- Call into the page with `tab.callInjection(name, args)`. Arguments travel as JSON through `callAsyncJavaScript`'s argument dictionary; JavaScript is never built from strings.
+
+**Tests:**
+- Unit tests for the payload schema, under `core/Tests/LilyCoreTests/`.
+- A check in `App/SelfTest.swift` that loads a fixture page and confirms the module works end to end (see "procedural filters").
+- `make check` runs the lint and the tests. CI runs it too.
+
+## 2. Audit and pin a third-party extension
+
+Settings → Extensions → **Add Extension…** accepts an unpacked folder (with `manifest.json`), a `.zip`, or a Chrome Web Store `.crx`.
+
+**Adding straight from the Chrome Web Store.** Paste a store link (`https://chromewebstore.google.com/detail/<name>/<id>`) or the 32-letter ID into the field in Settings → Extensions and choose **Add from Store** (`ChromeWebStore.swift`, `CRX3.swift`):
+
+1. Lily downloads the package from Google's update service, with no cookies, cache or stored credentials, at most 200 MB, and only over HTTPS from Google's hosts:
+   ```
+   https://clients2.google.com/service/update2/crx?response=redirect&prodversion=<current Chrome>&acceptformat=crx3&x=id%3D<ID>%26installsource%3Dondemand%26uc
+   ```
+   The reported Chrome version is worked out from the date (Chrome's four-week release cycle). The store answers "no download" when an extension needs a newer Chrome than the one reported; 1Password, for example, needs 137 or later.
+2. **Verify the signature.** Only CRX3 is accepted. Every RSA (2048-bit or larger) and P-256 signature in the header must verify over the signed header and the zip. One of the signing keys must hash to the requested ID, and another must be the Chrome Web Store's publisher key (the same hash Chromium pins). So a download that was swapped, damaged, is a different extension or didn't come through the store is refused before it's unpacked.
+3. From there it's the same as adding a file: unpack, audit, approve, pin. The record remembers the store ID.
+
+**What happens when you add it** (`ExtensionPackage.swift`, `ExtensionAudit.swift`, `ExtensionManager.swift`):
+
+1. **Unpack in memory.** Lily parses the CRX header (v2 or v3) and the zip itself; no `unzip` process is launched.
+   - Limits: 5,000 files, 50 MB per file, 200 MB in total.
+   - Every entry's CRC-32 is checked.
+   - Refused outright: absolute paths, `..`, backslashes, control or bidi characters, links, encrypted entries and duplicate names.
+2. **Audit.** A static scan of `manifest.json` and every `.js` / `.html` file.
+
+   | Result | Triggers |
+   |---|---|
+   | **Blocked** (can't be installed) | A content security policy for extension pages that allows `'unsafe-eval'`, `'unsafe-inline'` or remote or `data:`/`blob:` script sources; `<script src="https://…">`; `importScripts("https://…")`; `import("https://…")`. Any of these would let it run code that was never reviewed. |
+   | **Warning** (shown before you approve) | `eval`, `new Function`, string timers, native messaging, analytics or error-reporting calls (Google Analytics, Sentry, Mixpanel, Segment and others, counted only where code sends a request), sensitive permissions (cookies, history, webRequest, scripting…), access to every website, `externally_connectable`, sandboxed pages with relaxed policies |
+   | **Info** | Manifest V2, `innerHTML` / `document.write`, WebAssembly, an `update_url` (ignored), the servers the code mentions |
+
+3. **Approve.** The dialog lists every permission, the warnings and the start of the copy's SHA-256.
+4. **Pin.** The files are written owner-only (0600) to `Application Support/Lily/Extensions/<uuid>/` inside the app's container, excluded from backups. Their SHA-256 (over every path and file) is stored in `extensions.sealed`, which is encrypted and authenticated with the Keychain key.
+5. **Verify on every launch.** Before loading, Lily re-reads the pinned folder and compares the hash. If anything changed, the extension isn't loaded and Settings says so.
+
+**Updates are never automatic.** WebKit doesn't follow `update_url`, and the pinned copy can't change without failing its hash. To update, download the new `.crx`, add it (it's audited again), and remove the old version.
+
+Extensions installed before pinning existed (loaded from your folder) are copied, audited and pinned once on their next load. If one would now be blocked, it's turned off.
+
+**Limits of the scan.** It's a static review. It catches the ways an extension can pull in outside code and the common telemetry endpoints, but minified or obfuscated code can hide behavior. Read the code of anything that handles sensitive pages. For store downloads the CRX3 signatures are checked against the requested ID (a `.crx` file you add yourself isn't, since there's no ID to check it against). The audit and the pinned hash are what's trusted after that. To confirm you have the same copy as someone else, compare the hash shown in Settings → Extensions.
+
+## Architecture
+
+The modules `CLAUDE.md` names live in the Swift package (`core/Sources/LilyCore/`), since SwiftPM compiles sources only from there. The shim script lives in `injections/`.
+
+| Contract | File | What it does |
+|---|---|---|
+| Manifest model | `Extensions/ExtensionManifest.swift` | `Codable`, `Sendable` model of MV2/MV3 manifests: content scripts, background, action, permissions, CSP, icons, `__MSG_…__` localization. Lenient: a field with an unexpected shape is treated as absent. |
+| Isolated loading | `Extensions/ExtensionActor.swift` | `@globalActor ExtensionActor`. Reading, auditing, pinning and hash checks all run here, off the main thread. |
+| Installed extensions | `Extensions/ExtensionLibrary.swift` | Install, audit, approval, pinning, sealed list and integrity checks, on every macOS version. |
+| Store ingestion | `Extensions/ChromeWebStore.swift`, `Extensions/CRX3.swift` | Store link or ID → CRX3 download → signature and ID verification, before the usual audit. |
+| Runtime, macOS 15.4+ | `Extensions/ExtensionManager.swift` | WebKit's `WKWebExtensionController`: content scripts, background, popups, `chrome.*` APIs and extension storage. It stays on the main actor because WebKit's extension types are main-thread only. |
+| Script injection, macOS 14–15.3 | `Extensions/ExtensionScriptInjector.swift` | Content scripts as `WKUserScript`s, each extension in its own content world (`LilyExtension.<id>`), chosen by match patterns when a page starts loading. |
+| Message bridge, macOS 14–15.3 | `Extensions/ExtensionMessageBridge.swift`, `injections/extension-compat.js` | A first-party shim gives content scripts `chrome.storage.local` / `sync` (sealed, 10 MB quota per extension) and `storage.onChanged`. It talks to native code through a handler that accepts only schema-validated `{ action, payload }` JSON from its own world. |
+| Native messaging | `Extensions/NativeMessagingHostManager.swift` | See below. Never starts a process. |
+| Toolbar | `UI/ExtensionToolbarView.swift` | SwiftUI popover: each extension's icon and action badge, Add and Manage. |
+
+**Chrome APIs WebKit doesn't have.** WebKit's runtime provides `action`, `alarms`, `commands`, `contextMenus`, `declarativeNetRequest`, `dom`, `extension`, `i18n`, `permissions`, `runtime`, `scripting`, `storage`, `tabs`, `webNavigation`, `webRequest` and `windows`. Extensions built for Chrome may call others as soon as their background starts and die without them. 1Password's worker, for example, throws on `chrome.notifications.onClicked` and its popup never gets an answer. So when an extension is added, `ExtensionCompat` puts Lily's worker shim (`injections/extension-worker-compat.js`) in front of its background:
+- It adds inert stand-ins for `privacy`, `management`, `idle` and `downloads` (only those the manifest asks for and WebKit lacks), for missing events (`webNavigation.onCreatedNavigationTarget` and others), and an empty `storage.managed`. Events never fire, queries return defaults, and actions that need the browser (a download) report that they aren't supported.
+- It gives `notifications` a real implementation through Lily (`Extensions/ExtensionNotifications.swift`), described below.
+- It replaces `WebSocket` in service workers with one that connects through Lily (`Extensions/ExtensionWebSockets.swift`), described below. WebKit's own freezes the background.
+- A real API is never replaced. The extension's own files are unchanged; the manifest's background points to a two-line entry that loads the shim, then the original.
+- It's added before the audit and the hash, so it's part of the reviewed, pinned copy, and the approve dialog says it's there. Extensions added before this need to be added again (Settings offers "Reinstall").
+
+**Compatibility mode (macOS 14–15.3)** runs page scripts only. Popups, background scripts and service workers, `runtime.sendMessage` and most `chrome.*` APIs need WebKit's extension controller, so they return a clear error instead.
+
+### Native messaging and password managers
+
+Lily doesn't bridge extensions to desktop helper apps. 1Password's, Bitwarden's and similar helpers check the calling browser against a built-in, signed list of known browsers (Chrome, Safari, Firefox, Edge, Brave), so they would reject Lily however the pipes were set up. Launching other apps' binaries from the App Sandbox would also widen the attack surface for nothing.
+
+Instead, `runtime.connectNative` and `runtime.sendNativeMessage` fail immediately with "Lily doesn't connect extensions to desktop apps. Sign in within the extension instead.":
+- On macOS 15.4+, through `WKWebExtensionControllerDelegate`.
+- On older versions, through the bridge.
+
+Extensions can handle that error and fall back to their own features: extension storage, their popup and options pages, and web sign-in in a tab. Nothing waits on a host that will never answer.
+
+### Notifications
+
+WebKit has no `chrome.notifications`, and the only way an extension's background can reach the app is native messaging. So Lily reserves native-messaging names it answers itself (`dev.lily.notifications`, `dev.lily.websocket`, `dev.lily.console`); no process is started and no other app is involved.
+- **Who can use it.** At load, every extension with a background is granted `nativeMessaging`, which WebKit needs before it exposes the API. WebKit's own `runtime` members can't be hidden, so the extension's code sees `sendNativeMessage` and `connectNative` too, but they reach only Lily's names (notifications only for extensions approved for them); every other name is refused as before.
+- **Requests.** The shim turns `create`, `update`, `clear`, `getAll` and `getPermissionLevel` into requests. Each is decoded into a fixed schema (`ExtensionNotifications.Request`, at most 16 KB, IDs up to 256 characters without control characters, text shortened like Chrome does, two buttons). Images, progress and `requireInteraction` are ignored.
+- **Showing.** Through `UNUserNotificationCenter`, with the extension's name as the subtitle. macOS asks permission before the first one. An extension's notifications are removed when it's removed or turned off.
+- **Events.** Clicks, button clicks and dismissals go back over a port the shim opens after its first `create`. Lily closes the port once none of the extension's notifications are showing. Events that arrive while the background is asleep are kept (up to 50), the background is started, and the shim collects them once the extension adds a listener.
+
+### WebSockets in service workers
+
+WebKit runs an extension's service worker on its web process's main thread, and `new WebSocket("wss://…")` there waits for that same thread to set the connection up: the background freezes for good, along with every popup, content script and message waiting on it. 1Password opens its sync connection right after sign-in, so the sign-in never finished and the extension stopped answering.
+
+In a service worker the shim's `WebSocket` connects through Lily instead, one `dev.lily.websocket` port per socket. It behaves like the real one: `open`, `message` (text and binary, `binaryType`), `error` and `close` events and their `on…` properties, `send`, `close`, `readyState`. Lily (`ExtensionWebSockets`) decodes each request into a fixed schema, opens only `ws:`/`wss:` URLs with a host, limits messages to 1 MB and sockets to 16 per extension, sends the extension's origin as a WebSocket from its background would, and carries no cookies. A socket closes with its port: when the background unloads or the extension is turned off. Background pages (MV2, `background.scripts`) keep WebKit's own `WebSocket`, which works there.
+
+### Debugging an extension
+
+Lily's Web Inspector can't attach to extension backgrounds in practice, so debugging runs on logs and process samples:
+1. **Turn on** Settings → General → *Show features for web developers*. The worker shim then forwards the background's console, every message it receives (`[Lily] received <name> from host tab X frame Y`), each listener's reply kind and delay (`[Lily] reply <name>: Success after N ms`, or `no reply … after 10 s`), and pages' `*-log-event` reports. Contents are never logged.
+2. **Stream the log** (debug level isn't kept on disk):
+   `log stream --level debug --style compact --predicate 'subsystem == "dev.lily.browser" AND (category == "extensions" OR category == "web")'`
+3. **If the background goes silent** after a message (no reply, no further console lines, not even timers), it is frozen, not slow. Find the WebContent processes started with Lily (`ps -axo pid,etime,%cpu,rss,command | grep WebContent`) and `sample <pid> 2` each. A main thread parked in a WebCore wait (e.g. `WorkerThreadableWebSocketChannel` → `BinarySemaphore::waitUntil`) is a WebKit deadlock; work around it in the shim.
+4. **Process suspension** shows in `log show --predicate 'process == "Lily" AND category == "ProcessSuspension"'` (`PrepareToSuspend`).
+5. Reproduce in a unit test with a tiny MV3 extension (see `ExtensionWebSocketsTests`, `ExtensionMessageDiagnosticsTests`): signal progress with `chrome.action.setBadgeText` / `setTitle` and read `context.action(for: nil)`.
+
+**1Password status (2026-10-26): working.** Account sign-in succeeds, the vault and passwords show in the popup, and passkeys sign in to websites (tested on Google). What took 1Password from "opens a tab" to working: the popover presenter (#58), notifications (#59), extension pages in tabs (#60, #61), no process suspension (#63), WebSocket bridge (#64).
+
+## 3. Runtime isolation
+
+What's enforced, and where:
+
+| Guarantee | How |
+|---|---|
+| Extensions can't reach Lily's native bridge | The `arc` message handler exists only in the `LilyInjections` content world (`ScriptMessageBridge.attach`). Page scripts and extension content scripts run in other worlds and don't see it; the self-test checks the page world. |
+| Extension pages can't use the bridge either | `ScriptMessageBridge` answers only messages from its own content world, from frames whose WebKit-reported origin is `https`, `http` or `file`. `webkit-extension:` pages are refused even when opened in a tab. |
+| Only reviewed code runs | WebKit enforces each extension's CSP (Manifest V3 defaults to `script-src 'self'`). The audit refuses policies that would allow eval or remote scripts on extension pages, so the pinned files are all an extension can run. |
+| Only approved permissions | Permissions and host patterns are granted explicitly at each load, from what was approved at install (`ExtensionManager.load`). |
+| Extensions can't see each other or the page | Compatibility-mode content scripts run in a separate content world per extension. Page scripts can't read their variables, and `chrome` never appears in the page. |
+| No extensions in private windows | Private windows use a separate configuration without the extension controller or the compatibility injector. |
+| No desktop helpers | Native messaging is refused without starting any process. Lily's own names are the exception, answered in-process: notifications (for extensions approved for them), WebSockets for service workers, and console diagnostics. |
+| OS-level containment | Extensions run in WebKit's own processes under Lily's App Sandbox (outbound network only, no file access beyond what you open). |

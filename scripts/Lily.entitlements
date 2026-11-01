@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- App Sandbox + hardened runtime. Keep this list minimal: every key widens what the app can do.
+     No temporary exceptions; the app launches no helper executables. -->
+<plist version="1.0">
+<dict>
+  <key>com.apple.security.app-sandbox</key><true/>
+  <!-- Outbound only: websites and Ollama. No listening sockets. -->
+  <key>com.apple.security.network.client</key><true/>
+  <!-- Downloads land in ~/Downloads; local .html files are opened only when the user picks them. -->
+  <key>com.apple.security.files.downloads.read-write</key><true/>
+  <key>com.apple.security.files.user-selected.read-only</key><true/>
+  <!-- Read-only, app-scoped bookmarks so file:// tabs the user opened can be restored after relaunch. -->
+  <key>com.apple.security.files.bookmarks.app-scope</key><true/>
+  <key>com.apple.security.print</key><true/>
+  <!-- WebRTC and media capture on websites (getUserMedia): sandbox and hardened-runtime keys. -->
+  <key>com.apple.security.device.camera</key><true/>
+  <key>com.apple.security.device.microphone</key><true/>
+  <key>com.apple.security.device.audio-input</key><true/>
+</dict>
+</plist>
