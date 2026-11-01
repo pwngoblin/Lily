@@ -182,11 +182,23 @@ enum MarkdownRenderer {
     /// Replies are written from page text, which can tell the model to write
     /// `[paypal.com](https://evil.example)`. Each web link whose text doesn't already name its
     /// real host gets the host after it, so the reply can't hide where a link goes.
+    /// True when the link text names `host` as a whole domain (`www.` ignored on both sides).
+    /// A substring test isn't enough: `paypal.com` contains `ypal.com` and `al.com`.
+    static func namesHost(_ label: String, _ host: String) -> Bool {
+        func bare(_ name: Substring) -> Substring {
+            let name = name.hasSuffix(".") ? name.dropLast() : name
+            return name.hasPrefix("www.") ? name.dropFirst(4) : name
+        }
+        let site = bare(Substring(host.lowercased()))
+        return label.lowercased()
+            .split { !($0.isLetter || $0.isNumber || $0 == "." || $0 == "-") }
+            .contains { bare($0) == site }
+    }
+
     static func revealLinkHosts(in text: inout AttributedString) {
         let links = text.runs.compactMap { run -> (Range<AttributedString.Index>, String)? in
             guard let url = run.link, url.scheme == "https" || url.scheme == "http", let host = url.host?.lowercased(), !host.isEmpty else { return nil }
-            let site = host.hasPrefix("www.") ? String(host.dropFirst(4)) : host
-            return String(text[run.range].characters).lowercased().contains(site) ? nil : (run.range, host)
+            return namesHost(String(text[run.range].characters), host) ? nil : (run.range, host)
         }
         // From the end, so earlier ranges stay valid.
         for (range, host) in links.reversed() {

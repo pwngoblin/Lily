@@ -58,6 +58,18 @@ import WebKit
         #expect(Tab.isAllowedNavigation(URL(string: "https://example.com")!, isMainFrame: true, allowedData: nil, allowedFile: nil))
     }
 
+    /// window.open, target=_blank and cmd-clicked frame links become top-level tabs, which load
+    /// whatever URL they're given: the page's request must pass the top-level rules first.
+    @Test func pagesCannotOpenFilesDataOrExtensionPagesInNewTabs() {
+        #expect(!Tab.isAllowedNewTab(URL(string: "data:text/html,<form>login</form>")!, openerExtension: nil))
+        #expect(!Tab.isAllowedNewTab(URL(fileURLWithPath: "/Users/me/Downloads/statement.pdf"), openerExtension: nil))
+        #expect(!Tab.isAllowedNewTab(URL(string: "webkit-extension://abc123/options.html#x")!, openerExtension: nil))
+        #expect(!Tab.isAllowedNewTab(URL(string: "webkit-extension://abc123/options.html")!, openerExtension: "other"))
+        #expect(Tab.isAllowedNewTab(URL(string: "webkit-extension://ABC123/help.html")!, openerExtension: "abc123"))
+        #expect(Tab.isAllowedNewTab(URL(string: "https://example.com/")!, openerExtension: nil))
+        #expect(Tab.isAllowedNewTab(URL(string: "https://example.com/")!, openerExtension: "abc123"))
+    }
+
     @Test func internalPagesNeverUseNilOrFileBaseURLs() {
         #expect(ErrorPage.baseURL(for: URL(string: "https://down.example/x")!).host == "down.example")
         for odd in [nil, URL(fileURLWithPath: "/Users/me/secret.html"), URL(string: "about:blank"), URL(string: "data:text/html,x")] {
