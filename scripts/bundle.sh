@@ -31,7 +31,8 @@ cp "$BIN" "$OUT/Contents/MacOS/Lily"
 EXE="$OUT/Contents/MacOS/Lily"
 # Drop every rpath except the OS Swift runtime: toolchain paths baked in by the linker are a
 # dylib-hijacking surface and nothing loads through @rpath.
-for rpath in $(otool -l "$EXE" | awk '/cmd LC_RPATH/{getline; getline; print $2}'); do
+# sort -u: a universal binary lists each slice's rpaths, and one delete removes it from every slice.
+for rpath in $(otool -l "$EXE" | awk '/cmd LC_RPATH/{getline; getline; print $2}' | sort -u); do
   [ "$rpath" = "/usr/lib/swift" ] || install_name_tool -delete_rpath "$rpath" "$EXE"
 done
 # Keep symbols for crash reports in a dSYM next to the app (never shipped), then strip the binary.

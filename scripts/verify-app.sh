@@ -46,7 +46,8 @@ while IFS= read -r rpath; do
   [ -n "$rpath" ] || continue
   [ "$rpath" = "/usr/lib/swift" ] || fail "unexpected LC_RPATH: $rpath (dylib hijacking surface)"
 done <<< "$rpaths"
-deps="$(otool -L "$BIN" | tail -n +2 | awk '{print $1}')"
+# Skip the "<binary> (architecture …):" header otool prints once per slice of a universal binary.
+deps="$(otool -L "$BIN" | awk 'NF && $0 !~ /:$/ {print $1}' | sort -u)"
 while IFS= read -r dep; do
   [ -n "$dep" ] || continue
   case "$dep" in /System/*|/usr/lib/*) ;; *) fail "loads a non-system library: $dep" ;; esac
