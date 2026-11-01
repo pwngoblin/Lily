@@ -1,3 +1,4 @@
+import JavaScriptCore
 import Foundation
 import Testing
 import WebKit
@@ -165,5 +166,27 @@ private func package(_ manifest: String, _ files: [String: String] = [:]) throws
         #expect(state == ["hello", "undefined", "refused", "none", "isolated"], "\(state)")
         #expect(await library.storage.get("compat", keys: nil) == ["greeting": "hello"])
         injector.forget(configuration.userContentController)
+    }
+}
+
+/// Compatibility mode: an `all_frames` script runs in frames of the main frame's origin only.
+@Suite struct CompatFrameGuardTests {
+    private func runs(_ guarded: String, top: Bool, origin: String) -> Bool {
+        let js = JSContext()!
+        js.evaluateScript("var window = {}; window.top = \(top ? "window" : "{}"); var location = { origin: \"\(origin)\" }; var ran = false;")
+        js.evaluateScript(guarded)
+        return js.objectForKeyedSubscript("ran").toBool()
+    }
+
+    @Test func allFramesScriptsSkipCrossOriginFrames() {
+        let main = URL(string: "https://Shop.example:443/cart")!
+        #expect(ExtensionScriptInjector.origin(main) == "https://shop.example")
+        #expect(ExtensionScriptInjector.origin(URL(string: "http://127.0.0.1:8001/")!) == "http://127.0.0.1:8001")
+        let guarded = ExtensionScriptInjector.sameOriginFramesOnly("ran = true;", mainFrame: main)
+        #expect(runs(guarded, top: true, origin: "https://anything.example"))   // the main frame itself
+        #expect(runs(guarded, top: false, origin: "https://shop.example"))      // same-origin frame
+        #expect(!runs(guarded, top: false, origin: "https://pay.example"))      // cross-origin frame
+        let strict = ExtensionScriptInjector.sameOriginFramesOnly("  'use strict'; ran = true;", mainFrame: main)
+        #expect(strict.hasPrefix("\"use strict\";if (window !== window.top"))
     }
 }
