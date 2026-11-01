@@ -70,4 +70,18 @@ import WebKit
         #expect(library.installed.isEmpty && library.ready.isEmpty)
         #expect(library.lastError != nil)
     }
+
+    /// The pre-seal UserDefaults list is writable by other processes: it's removed, never adopted.
+    @Test func unsealedLegacyExtensionListIsIgnored() async throws {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("lily-extlegacy-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { UserDefaults.standard.removeObject(forKey: ExtensionLibrary.storageKey) }
+        let planted = InstalledExtension(id: "planted", bookmark: nil, pinnedFolder: "../../Downloads/dummy-ext", contentHash: "00",
+                                         enabled: true, grantedPermissions: ["cookies"], grantedPatterns: ["<all_urls>"])
+        UserDefaults.standard.set(try JSONEncoder().encode([planted]), forKey: ExtensionLibrary.storageKey)
+        let library = ExtensionLibrary(directory: dir, keys: InMemoryKeyStore())
+        await library.loadAll()
+        #expect(library.installed.isEmpty && library.ready.isEmpty)
+        #expect(UserDefaults.standard.object(forKey: ExtensionLibrary.storageKey) == nil)
+    }
 }
