@@ -12,6 +12,7 @@ extension BrowserWindowController {
             let metadata = try PagePayload.metadata(p, origin: origin)
             guard !ErrorPage.isInternal(metadata.url) else { return .null } // Lily's own pages aren't history
             tab.applyMetadata(metadata)
+            if tabID == self.tabs.activeID { self.model.selection = tab.lastSelection } // cleared on commit
             self.history?.record(url: metadata.url, title: metadata.title)
             self.offerFormRestore(tab)
             // A navigation resets the page's scripts; a pane of a linked split links again.

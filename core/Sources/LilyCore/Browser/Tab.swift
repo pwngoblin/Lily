@@ -577,6 +577,9 @@ extension Tab: WKNavigationDelegate {
     }
 
     public func webView(_ webView: WKWebView, didCommit navigation: WKNavigation!) {
+        // A selection belongs to the document it was made in; the new page (maybe another site)
+        // must not inherit it as assistant context. The new document reports its own.
+        lastSelection = nil
         upgradedFrom = nil
         dialogCount = 0
         dialogsSuppressed = false
