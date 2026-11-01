@@ -248,6 +248,21 @@ actor GatedKeyStore: KeyStore {
         #expect(try await file.read() == Data("after".utf8))
     }
 
+    /// The snapshot is taken (and may still be encoding) before its write starts: a clear after the
+    /// snapshot must still win, and a stale delete must not remove newer data.
+    @Test func orderFollowsWhenTheSnapshotWasTaken() async throws {
+        let file = try file(InMemoryKeyStore())
+        let stale = file.reserve()            // history snapshot taken, still encoding…
+        file.delete()                          // …Clear Browsing Data
+        try await file.write(Data("cleared visits".utf8), ticket: stale)
+        #expect(!FileManager.default.fileExists(atPath: file.url.path))
+
+        let oldEmpty = file.reserve()          // an empty snapshot from before a new visit
+        try await file.write(Data("new visit".utf8))
+        file.delete(ticket: oldEmpty)
+        #expect(try await file.read() == Data("new visit".utf8))
+    }
+
     @Test func anOlderWriteNeverReplacesANewerOne() async throws {
         let keys = GatedKeyStore()
         let file = try file(keys)

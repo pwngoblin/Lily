@@ -172,17 +172,24 @@ public struct SealedFile: Sendable {
         self.keys = keys
     }
 
-    /// Writes and deletes of one file land in the order they were asked for: a write still waiting
-    /// for its key when a newer write or a delete (Clear Browsing Data) happens is dropped, so a stale
-    /// snapshot can never bring back what was cleared.
-    public func write(_ plaintext: Data) async throws {
-        let ticket = Self.order.withLock { $0.issue(url) }
+    /// A place in this file's order of writes and deletes. Take it when the snapshot to save is
+    /// captured (before encoding it), so a later delete or newer snapshot always wins.
+    public struct Ticket: Sendable { fileprivate let value: UInt64 }
+
+    public func reserve() -> Ticket { Ticket(value: Self.order.withLock { $0.issue(url) }) }
+
+    /// Writes and deletes of one file land in snapshot order: a write whose snapshot is older than a
+    /// later write or delete (Clear Browsing Data) is dropped, so a stale snapshot can never bring
+    /// back what was cleared. Without a ticket, the place is taken when this call starts running,
+    /// which is after any hop off the caller's actor: callers with a snapshot pass `reserve()`.
+    public func write(_ plaintext: Data, ticket: Ticket? = nil) async throws {
+        let ticket = ticket ?? reserve()
         let key = try await keys.key(named: keyName)
         guard let sealed = try AES.GCM.seal(plaintext, using: key, authenticating: Data(purpose.utf8)).combined else {
             throw CocoaError(.fileWriteUnknown)
         }
         try Self.order.withLock { order in
-            guard order.commit(url, ticket) else { return }
+            guard order.commit(url, ticket.value) else { return }
             try Self.writeProtected(sealed, to: url)
         }
     }
@@ -194,9 +201,11 @@ public struct SealedFile: Sendable {
         return try AES.GCM.open(AES.GCM.SealedBox(combined: sealed), using: key, authenticating: Data(purpose.utf8))
     }
 
-    public func delete() {
+    /// Deletes the file, and drops every write whose snapshot is older (an older delete is a no-op).
+    public func delete(ticket: Ticket? = nil) {
+        let ticket = ticket ?? reserve()
         Self.order.withLock { order in
-            order.invalidate(url)
+            guard order.commit(url, ticket.value) else { return }
             try? FileManager.default.removeItem(at: url)
         }
     }
@@ -218,8 +227,6 @@ public struct SealedFile: Sendable {
             floor[url.path] = ticket
             return true
         }
-
-        mutating func invalidate(_ url: URL) { floor[url.path] = issued[url.path, default: 0] }
     }
 
     private static let order = OSAllocatedUnfairLock(initialState: WriteOrder())

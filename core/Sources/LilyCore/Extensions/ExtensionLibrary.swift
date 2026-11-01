@@ -273,8 +273,9 @@ final class ExtensionLibrary {
 
     private func save() {
         guard let file, let data = try? JSONEncoder().encode(installed) else { return }
+        let ticket = file.reserve() // saves land in the order the list changed
         Task.detached(priority: .utility) {
-            do { try await file.write(data) } catch { Log.extensions.error("Saving installed extensions failed") }
+            do { try await file.write(data, ticket: ticket) } catch { Log.extensions.error("Saving installed extensions failed") }
         }
     }
 

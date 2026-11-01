@@ -138,9 +138,10 @@ public final class SiteSettings {
     }
 
     private static func write(_ snapshot: [String: Site], to file: SealedFile) async {
+        let ticket = file.reserve() // ordered by when the snapshot was taken, not when it's written
         await Task.detached(priority: .utility) {
             do {
-                if snapshot.isEmpty { file.delete() } else { try await file.write(JSONEncoder().encode(snapshot)) }
+                if snapshot.isEmpty { file.delete(ticket: ticket) } else { try await file.write(JSONEncoder().encode(snapshot), ticket: ticket) }
             } catch {
                 Log.app.error("Site settings save failed: \(String(describing: error), privacy: .public)")
             }

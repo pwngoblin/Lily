@@ -142,10 +142,11 @@ final class FaviconLoader {
         guard let file else { return }
         saveTask?.cancel()
         let snapshot = kept
+        let ticket = file.reserve() // a forget(.all) after this snapshot drops it
         saveTask = Task {
             try? await Task.sleep(for: .seconds(5))
             guard !Task.isCancelled, let data = try? JSONEncoder().encode(snapshot) else { return }
-            do { try await file.write(data) } catch { Log.app.error("Saving site icons failed") }
+            do { try await file.write(data, ticket: ticket) } catch { Log.app.error("Saving site icons failed") }
         }
     }
 }
