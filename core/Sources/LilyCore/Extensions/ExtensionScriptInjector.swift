@@ -9,7 +9,9 @@ import WebKit
 /// native messaging, through `ExtensionMessageBridge`.
 ///
 /// Scripts are chosen by the main frame's address when a page starts loading (WKUserScript has no
-/// per-frame match patterns), and `all_frames` scripts then run in that page's frames.
+/// per-frame match patterns). `all_frames` scripts then run only in frames of the main frame's
+/// origin: a cross-origin frame (a payment field, a login widget) was never matched, so the
+/// extension gets no access to it.
 @MainActor
 final class ExtensionScriptInjector {
     struct Planned: Equatable {
@@ -84,10 +86,32 @@ final class ExtensionScriptInjector {
             if shimmed.insert(script.extensionID).inserted {
                 controller.addUserScript(WKUserScript(source: shimSource, injectionTime: .atDocumentStart, forMainFrameOnly: false, in: world))
             }
-            controller.addUserScript(WKUserScript(source: String(decoding: data, as: UTF8.self), injectionTime: script.time,
+            let source = String(decoding: data, as: UTF8.self)
+            controller.addUserScript(WKUserScript(source: script.mainFrameOnly ? source : Self.sameOriginFramesOnly(source, mainFrame: url),
+                                                  injectionTime: script.time,
                                                   forMainFrameOnly: script.mainFrameOnly, in: world))
         }
         applied[key] = planned
+    }
+
+    /// `source` guarded to stop in any frame whose origin isn't the main frame's (`url`). A thrown
+    /// error ends a classic script without wrapping it, so its top-level declarations keep their
+    /// meaning; a leading "use strict" is repeated before the guard so the script stays strict.
+    nonisolated static func sameOriginFramesOnly(_ source: String, mainFrame url: URL?) -> String {
+        let origin = url.flatMap(Self.origin) ?? "null"
+        let literal = (try? String(decoding: JSONEncoder().encode([origin]), as: UTF8.self)).map { String($0.dropFirst().dropLast()) } ?? "\"null\""
+        let trimmed = source.drop { $0.isWhitespace }
+        let strict = trimmed.hasPrefix("\"use strict\"") || trimmed.hasPrefix("'use strict'") ? "\"use strict\";" : ""
+        return strict + "if (window !== window.top && location.origin !== \(literal)) "
+            + "throw new Error(\"Lily: this content script doesn't run in frames of other sites\");\n" + source
+    }
+
+    /// An http(s) URL's origin as `location.origin` writes it; nil for others (file: is "null").
+    nonisolated static func origin(_ url: URL) -> String? {
+        guard let scheme = url.scheme?.lowercased(), scheme == "http" || scheme == "https", let host = url.host?.lowercased() else { return nil }
+        let defaultPort = scheme == "https" ? 443 : 80
+        let host6 = host.contains(":") ? "[\(host)]" : host
+        return "\(scheme)://\(host6)" + (url.port.map { $0 == defaultPort ? "" : ":\($0)" } ?? "")
     }
 
     /// A tab is closing: drop what was installed for it.
