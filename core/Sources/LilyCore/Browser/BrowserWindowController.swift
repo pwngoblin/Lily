@@ -450,6 +450,9 @@ extension BrowserWindowController: TabDelegate {
 
     public func tab(_ tab: Tab, requestsLittleWith request: URLRequest) {
         guard let url = request.url else { return }
+        // Little Lily windows use the regular profile: from a private window the link stays in
+        // this window, so it never reaches persistent history, cookies or drafts.
+        if isPrivate { tabs.create(url: url, activate: true); return }
         openLittle?(url)
     }
 
