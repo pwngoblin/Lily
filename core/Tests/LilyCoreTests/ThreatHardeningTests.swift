@@ -212,3 +212,52 @@ private func temporaryDirectory() throws -> URL {
         #expect(from < until)
     }
 }
+
+/// A key store whose key arrives only when the test says so, to hold a write mid-flight.
+actor GatedKeyStore: KeyStore {
+    private let key = SymmetricKey(size: .bits256)
+    private var open = false
+    private var waiting: [CheckedContinuation<Void, Never>] = []
+    private(set) var waiters = 0
+    func key(named name: String) async -> SymmetricKey {
+        if !open { waiters += 1; await withCheckedContinuation { waiting.append($0) } }
+        return key
+    }
+    func release() { open = true; waiting.forEach { $0.resume() }; waiting = [] }
+    func deleteKey(named name: String) {}
+}
+
+/// Clear Browsing Data deletes sealed files; a save already waiting for its key must not recreate them.
+@Suite struct SealedFileOrderTests {
+    private func file(_ keys: KeyStore) throws -> SealedFile {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("lily-order-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        return SealedFile(url: dir.appendingPathComponent("history.sealed"), keyName: "history", purpose: "test", keys: keys)
+    }
+
+    @Test func deleteWinsOverAnEarlierWriteStillInFlight() async throws {
+        let keys = GatedKeyStore()
+        let file = try file(keys)
+        let stale = Task { try await file.write(Data("visited before the clear".utf8)) }
+        while await keys.waiters == 0 { await Task.yield() }
+        file.delete() // Clear Browsing Data
+        await keys.release()
+        try await stale.value
+        #expect(!FileManager.default.fileExists(atPath: file.url.path))
+        try await file.write(Data("after".utf8)) // a write asked for after the clear still lands
+        #expect(try await file.read() == Data("after".utf8))
+    }
+
+    @Test func anOlderWriteNeverReplacesANewerOne() async throws {
+        let keys = GatedKeyStore()
+        let file = try file(keys)
+        let older = Task { try await file.write(Data("older".utf8)) }
+        while await keys.waiters == 0 { await Task.yield() }
+        let newer = Task { try await file.write(Data("newer".utf8)) }
+        while await keys.waiters < 2 { await Task.yield() }
+        await keys.release()
+        try await newer.value
+        try await older.value
+        #expect(try await file.read() == Data("newer".utf8))
+    }
+}
