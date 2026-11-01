@@ -55,6 +55,8 @@ final class BrowserWebView: WKWebView {
             split.target = self
             split.representedObject = newTab
             menu.insertItem(split, at: index + 1)
+            // Little Lily windows use the regular profile, so private windows don't offer them.
+            guard (window?.windowController as? BrowserWindowController)?.isPrivate != true else { return }
             let little = NSMenuItem(title: "Open Link in Little Lily", action: #selector(openLinkInLittle(_:)), keyEquivalent: "")
             little.image = NSImage(systemSymbolName: "macwindow", accessibilityDescription: nil)
             little.target = self

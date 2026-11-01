@@ -321,6 +321,31 @@ enum SelfTest {
             check("menu bar", removed.isEmpty && importItems == 1 && firstTabKey?.keyEquivalent == "1" && firstTabKey?.menu?.title == "Go to Tab",
                   ["unwanted": .array(removed.map(JSONValue.string)), "importItems": .number(Double(importItems))])
 
+            // A selection made on one site isn't assistant context on the next: the commit of a new
+            // document clears it.
+            let selecting = window.tabs.create(url: nil)
+            selecting.webView.loadHTMLString("<!doctype html><title>Sel A</title><p id=p>secret selected words</p>",
+                                             baseURL: URL(string: "https://a.selftest.lily.test/")!)
+            _ = await waitUntil(10) { selecting.title == "Sel A" }
+            _ = try? await selecting.webView.evaluateJavaScript("getSelection().selectAllChildren(document.getElementById('p'))")
+            let selected = await waitUntil(10) { selecting.lastSelection == "secret selected words" }
+            selecting.webView.loadHTMLString("<!doctype html><title>Sel B</title><p>other site</p>",
+                                             baseURL: URL(string: "https://b.selftest.lily.test/")!)
+            _ = await waitUntil(10) { selecting.title == "Sel B" }
+            check("selection cleared on navigation", selected && selecting.lastSelection == nil)
+            window.tabs.close(selecting.id)
+
+            // A private window's "Open Link in Little Lily" stays in that private window: Little Lily
+            // windows use the regular profile.
+            let privateWindow = BrowserWindowController(factory: window.factory, assistant: assistant, history: nil, isPrivate: true)
+            var littleOpened = false
+            privateWindow.openLittle = { _ in littleOpened = true }
+            let privateOpener = privateWindow.tabs.create(url: nil)
+            privateWindow.tab(privateOpener, requestsLittleWith: URLRequest(url: URL(string: "https://selftest.lily.test/private-link")!))
+            check("private Little Lily link stays private", !littleOpened && privateWindow.tabs.tabs.count == 2
+                    && privateWindow.tabs.active?.url == URL(string: "https://selftest.lily.test/private-link"))
+            privateWindow.close()
+
             // Little Lily: a one-page window; Open in Lily moves the live page into the main window
             // (same web view, no reload: the page's load stamp, typed text and scroll position
             // survive), the small window closes, and the page's messages reach the main window.
