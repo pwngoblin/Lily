@@ -1,6 +1,6 @@
 # Keeps the branch list honest. Merged branches are deleted by GitHub ("Automatically delete
 # head branches"); this deletes branches whose PR was closed without merging after 14 days, and
-# reports branches that never had a PR. main, release and testing are never touched.
+# reports branches that never had a PR. main is never touched.
 name: Branch hygiene
 
 on:
@@ -35,7 +35,7 @@ jobs:
             echo "|---|---|---|"
           } >> "$GITHUB_STEP_SUMMARY"
           gh api --paginate "repos/$repo/branches" -q '.[].name' | while read -r branch; do
-            case "$branch" in main|release|testing) continue ;; esac
+            [ "$branch" = main ] && continue
             open=$(gh pr list -R "$repo" --head "$branch" --state open --json number -q 'length')
             [ "$open" -gt 0 ] && continue
             last=$(gh pr list -R "$repo" --head "$branch" --state all --limit 1 --json state,closedAt,mergedAt -q '.[0] // empty')

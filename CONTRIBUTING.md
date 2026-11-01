@@ -7,8 +7,6 @@ Lily is licensed under the [GPL-3.0](LICENSE). By opening a pull request you agr
 | Branch | Purpose | Receives changes from | Who merges |
 |---|---|---|---|
 | `main` | Source of truth; always builds, tests and passes the security audit | feature branches via PR | maintainer, after **CI / test** passes |
-| `testing` | Pre-release builds (`vX.Y.Z-testing.N`) | **only** `main` | maintainer |
-| `release` | Public releases (`vX.Y.Z`) | `main`, or `hotfix/*` for urgent fixes | maintainer |
 
 Work happens on short-lived branches cut from `main`:
 
@@ -17,9 +15,8 @@ Work happens on short-lived branches cut from `main`:
 | `feature/…` | new functionality |
 | `fix/…` | bug or security fixes |
 | `chore/…`, `docs/…`, `ci/…`, `refactor/…` | everything else |
-| `hotfix/…` | urgent fix that must ship before `main` is ready; cut from `release`, PR into `release` **and** `main` |
 
-Never commit directly to `main`, `testing` or `release`, and never merge `release` or `testing` back into `main`: changes only flow *out* of `main`.
+Never commit directly to `main`. There are no release branches: releases are tags (`vX.Y.Z`) on `main`, so nothing is ever merged back.
 
 ## Pull requests
 
@@ -42,11 +39,11 @@ When one change builds on another, open PR B with PR A's branch as its base and 
 
 | To publish | Do this |
 |---|---|
-| a test build | Open a PR `main → testing`. The run attaches a DMG. Merge it to tag `vX.Y.Z-testing.N` and publish a **pre-release**. |
-| a release | Bump `VERSION` on `main` (via a normal PR). Open `main → release`; it fails if `vX.Y.Z` already exists. Check the DMG from the run, then merge to tag `vX.Y.Z` and publish the **Release**. |
-| a hotfix | Branch `hotfix/…` from `release`, PR into `release` (with a `VERSION` bump), then PR the same fix into `main`. |
+| a release | Open a PR into `main` that bumps `VERSION` (`chore(release): X.Y.Z`). Its run builds a release-candidate DMG (**Actions → run → Artifacts**) and fails if `vX.Y.Z` already exists. Merge it: the workflow tags `vX.Y.Z` on the merge commit and publishes the **Release**. |
+| a test build | **Actions → Build DMG → Run workflow** on `main`, channel `testing`: publishes pre-release `vX.Y.Z-testing.N` from the current `main`. |
+| a hotfix | A normal `fix/…` PR into `main`, then a `PATCH` bump PR. |
 
-The `source-guard` check rejects any other PR into `testing` or `release`.
+Only the workflow creates `v*` tags, and published tags can't be moved or deleted (*release tags* ruleset).
 
 ## Branch hygiene
 

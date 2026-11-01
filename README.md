@@ -360,12 +360,11 @@ What's not finished, what's deliberately unsupported, and what still needs a per
 
 | Action | Result |
 |---|---|
-| Open a PR from `main` into `testing` | Tests run and a DMG is attached to the workflow run (**Actions → run → Artifacts**) |
-| Merge it | Tag `vX.Y.Z-testing.N` and a GitHub pre-release with the DMG and its SHA-256 |
-| Open a PR from `main` into `release` | The same build as a release candidate; the PR fails if `vX.Y.Z` already exists |
-| Merge it | Annotated tag `vX.Y.Z` and a GitHub release (marked latest) with the DMG, its SHA-256 and generated notes |
+| Open a PR into `main` that bumps `VERSION` | Tests run and a release-candidate DMG is attached to the workflow run (**Actions → run → Artifacts**); the PR fails if `vX.Y.Z` already exists |
+| Merge it | Annotated tag `vX.Y.Z` on the merge commit and a GitHub release (marked latest) with the DMG, its SHA-256 and generated notes |
+| **Actions → Build DMG → Run workflow**, channel `testing` | Tag `vX.Y.Z-testing.N` and a GitHub pre-release built from the current `main` |
 
-To ship a release: bump `VERSION` on `main`, open a PR from `main` into `release`, check the DMG from the PR run, then merge.
+To ship a release: open a PR that bumps `VERSION`, check the DMG from its run, then merge. Releases are tags on `main`; there are no release branches.
 
 Signing and notarization turn on when these repository secrets are set:
 
