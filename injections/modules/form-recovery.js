@@ -117,8 +117,9 @@
   }
 
   // Native asks after the user chose Restore. Fills empty fields only; returns how many.
-  lily.register("form.restore", ({ drafts } = {}) => {
-    if (!Array.isArray(drafts)) return { restored: 0 };
+  lily.register("form.restore", ({ origin, drafts } = {}) => {
+    // Drafts go back only into the site they were typed on, never into whatever page is showing.
+    if (!Array.isArray(drafts) || typeof origin !== "string" || origin !== location.origin) return { restored: 0 };
     const fields = candidates();
     const empty = fields.filter((element) => textOf(element).trim() === "");
     let restored = 0;
