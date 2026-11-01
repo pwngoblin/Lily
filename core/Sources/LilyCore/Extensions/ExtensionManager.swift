@@ -158,7 +158,12 @@ final class ExtensionManager: NSObject, WKWebExtensionControllerDelegate {
 
     func webExtensionController(_ controller: WKWebExtensionController, openNewTabUsing configuration: WKWebExtension.TabConfiguration,
                                 for extensionContext: WKWebExtensionContext) async throws -> (any WKWebExtensionTab)? {
-        openTab(configuration.url, configuration.shouldBeActive)
+        // Same rule as tabs.update (Tab.loadURL); a nil URL opens Lily's new-tab page.
+        if let url = configuration.url, !Tab.extensionMayOpen(url, from: extensionContext.baseURL) {
+            Log.extensions.info("Refused tabs.create to a \(url.scheme ?? "?", privacy: .public): address")
+            throw URLError(.unsupportedURL)
+        }
+        return openTab(configuration.url, configuration.shouldBeActive)
     }
 
     func webExtensionController(_ controller: WKWebExtensionController, openOptionsPageFor extensionContext: WKWebExtensionContext) async throws {

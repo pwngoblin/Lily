@@ -44,11 +44,16 @@ extension Tab: WKWebExtensionTab {
     }
 
     public func loadURL(_ url: URL, for context: WKWebExtensionContext) async throws {
-        // Extensions may navigate to web pages and their own pages, never to file: or other local
-        // schemes or another extension's pages.
-        let ownPage = WebViewFactory.extensionHost(url) != nil && WebViewFactory.extensionHost(url) == context.baseURL.host?.lowercased()
-        guard url.scheme == "https" || url.scheme == "http" || ownPage else { throw URLError(.unsupportedURL) }
+        guard Self.extensionMayOpen(url, from: context.baseURL) else { throw URLError(.unsupportedURL) }
         load(url)
+    }
+
+    /// Where an extension may send a tab (tabs.update) or open one (tabs.create): web pages and its
+    /// own pages, never file: or other local schemes or another extension's pages.
+    nonisolated static func extensionMayOpen(_ url: URL, from extensionBaseURL: URL) -> Bool {
+        if let host = WebViewFactory.extensionHost(url) { return host == extensionBaseURL.host?.lowercased() }
+        let scheme = url.scheme?.lowercased()
+        return scheme == "https" || scheme == "http"
     }
 
     public func reload(fromOrigin: Bool, for context: WKWebExtensionContext) async throws {
